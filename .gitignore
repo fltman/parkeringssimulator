@@ -1,0 +1,19 @@
+# reference clip that inspired the project (third-party — not redistributed)
+paRkeringsimulator.mp4
+
+# demo build working files — keep only the final rendered video
+demo/raw/
+demo/audio/
+demo/vo/
+demo/seg/
+demo/**/.segments/
+demo/*.py
+demo/*.sh
+demo/manifest.json
+
+# junk
+.DS_Store
+**/.DS_Store
+__pycache__/
+**/__pycache__/
+node_modules/

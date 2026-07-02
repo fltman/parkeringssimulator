@@ -21,8 +21,8 @@
   const NODE_APPROACH = 6;      // start caring about the junction ahead within this
   const STOP_OFFSET = 2.5;      // stop this far short of (before) a blocked junction
   const BOX_CLEAR = 3.0;        // extra room needed past a junction before entering it
-  const HALF_LANE = 1.5;        // keep-right offset from the aisle centreline
-  const OT_OFFSET = 3.0;        // lateral shift into the oncoming lane when overtaking
+  const HALF_LANE = 2.3;        // keep-right offset from the centreline (wider lanes → opposing cars clear each other)
+  const OT_OFFSET = 4.0;        // lateral shift into the oncoming lane when overtaking
 
   function mulberry32(a) {
     return function () {
@@ -1334,19 +1334,23 @@
     for (const e of sim.net.edges) {
       if (e.cong < 0.06 && e.load === 0) continue;
       const A = sim.net.nodes[e.a], B = sim.net.nodes[e.b];
+      if (!A || !B) continue;
       const p1 = PS.w2s(cam, A.x, A.y), p2 = PS.w2s(cam, B.x, B.y);
       ctx.strokeStyle = congColor(Math.min(1, e.cong), 0.5);
       ctx.lineWidth = Math.max(3, 4.5 * cam.scale);
       ctx.beginPath(); ctx.moveTo(p1[0], p1[1]); ctx.lineTo(p2[0], p2[1]); ctx.stroke();
     }
-    // Pulse the worst spot.
+    // Pulse the worst spot. worstEdge can be a stale index after a network
+    // rebuild, so guard against a missing edge/nodes before dereferencing.
     if (sim.stats.worstEdge >= 0 && sim.stats.worstCong > 0.4) {
       const e = sim.net.edges[sim.stats.worstEdge];
-      const A = sim.net.nodes[e.a], B = sim.net.nodes[e.b];
-      const m = PS.w2s(cam, (A.x + B.x) / 2, (A.y + B.y) / 2);
-      ctx.strokeStyle = "rgba(210,40,40,0.9)";
-      ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(m[0], m[1], Math.max(10, 9 * cam.scale), 0, Math.PI * 2); ctx.stroke();
+      const A = e && sim.net.nodes[e.a], B = e && sim.net.nodes[e.b];
+      if (e && A && B) {
+        const m = PS.w2s(cam, (A.x + B.x) / 2, (A.y + B.y) / 2);
+        ctx.strokeStyle = "rgba(210,40,40,0.9)";
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(m[0], m[1], Math.max(10, 9 * cam.scale), 0, Math.PI * 2); ctx.stroke();
+      }
     }
     ctx.restore();
   };

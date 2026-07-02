@@ -372,7 +372,7 @@
     ctx.fillStyle = COLORS.asphalt;
     for (const sec of state.sections || []) { polyPath(ctx, cam, sec.poly || PS.sectionCorners(sec)); ctx.fill(); }
     ctx.strokeStyle = COLORS.asphalt; ctx.lineCap = "round"; ctx.lineJoin = "round";
-    ctx.lineWidth = Math.max(3, 6.5 * cam.scale);
+    ctx.lineWidth = Math.max(4, 9.75 * cam.scale);
     for (const r of state.roads || []) {
       if (r.length < 2) continue;
       ctx.beginPath();

@@ -1092,6 +1092,7 @@
   rangeBind("arr", "arr-val", (v) => { sim.arrivalRate = v; });
   rangeBind("dwell", "dwell-val", (v) => { sim.dwellMin = v; });
   rangeBind("speed", "speed-val", (v) => { sim.speedKmh = v; });
+  rangeBind("follow", "follow-val", (v) => { sim.followSec = v; });
   rangeBind("tempo", "tempo-val", (v) => { sim.tempo = v; });
   rangeBind("aggr", "aggr-val", (v) => { sim.meanAggr = v / 100; });
   rangeBind("caut", "caut-val", (v) => { sim.meanCaution = v / 100; });
@@ -1256,7 +1257,7 @@
       layoutMode: "manual", params: state.params, occupancyFrac: state.occupancyFrac,
       roads: state.roads, sections: state.sections, roundabouts: state.roundabouts,
       traffic: {
-        arrivalRate: sim.arrivalRate, dwellMin: sim.dwellMin, speedKmh: sim.speedKmh, tempo: sim.tempo,
+        arrivalRate: sim.arrivalRate, dwellMin: sim.dwellMin, speedKmh: sim.speedKmh, followSec: sim.followSec, tempo: sim.tempo,
         meanAggr: sim.meanAggr, meanCaution: sim.meanCaution, traitSpread: sim.traitSpread, allowOvertake: sim.allowOvertake,
       },
       map: (state.mapMode && state.map && state._anchor) ? {
@@ -1381,6 +1382,7 @@
     if (t.arrivalRate != null) sim.arrivalRate = t.arrivalRate;
     if (t.dwellMin != null) sim.dwellMin = t.dwellMin;
     if (t.speedKmh != null) sim.speedKmh = t.speedKmh;
+    if (t.followSec != null) sim.followSec = t.followSec;
     if (t.tempo != null) sim.tempo = t.tempo;
     if (t.meanAggr != null) sim.meanAggr = t.meanAggr;
     if (t.meanCaution != null) sim.meanCaution = t.meanCaution;
@@ -1393,6 +1395,7 @@
     setSlider("arr", "arr-val", sim.arrivalRate);
     setSlider("dwell", "dwell-val", sim.dwellMin);
     setSlider("speed", "speed-val", sim.speedKmh);
+    setSlider("follow", "follow-val", sim.followSec);
     setSlider("tempo", "tempo-val", sim.tempo);
     setSlider("aggr", "aggr-val", Math.round(sim.meanAggr * 100));
     setSlider("caut", "caut-val", Math.round(sim.meanCaution * 100));

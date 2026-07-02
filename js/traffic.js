@@ -508,7 +508,7 @@
       running: false,
       t: 0, dt: 0.15, tempo: 20,
       seed: 1337, rng: mulberry32(1337),
-      arrivalRate: 40, dwellMin: 20, speedKmh: 15,
+      arrivalRate: 40, dwellMin: 20, speedKmh: 15, followSec: 1.5,
       // Driver-population traits (means in [0,1]) + how much they vary per car.
       meanAggr: 0.5, meanCaution: 0.4, traitSpread: 0.35, allowOvertake: true,
       cars: [], peds: [], net: null, selectedCar: null,
@@ -1009,7 +1009,11 @@
             }
           }
         } else {
-          if (leaderGap < Infinity) move = Math.min(move, Math.max(0, leaderGap - CAR_LEN - gapMin));
+          // Time-headway ("three-second rule"): keep as much gap to the car ahead
+          // as you'd cover in followSec seconds at your CURRENT speed — never less
+          // than the static bumper gap (so cars still nudge close when stopped).
+          const followGap = Math.max(gapMin, (sim.followSec || 0) * (car.v || 0));
+          if (leaderGap < Infinity) move = Math.min(move, Math.max(0, leaderGap - CAR_LEN - followGap));
           // A stressed, aggressive, stuck driver may pull out to overtake.
           if (sim.allowOvertake && li.laneKey != null && li.edgeId >= 0 && (car.stuck || 0) > 3 &&
               car.v < 0.3 && tr.aggr > 0.62 && tr.stress > 0.55 && leader && leaderGap < CAR_LEN + 4 &&

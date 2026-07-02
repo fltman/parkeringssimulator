@@ -359,6 +359,12 @@
 
   // ---- interaction --------------------------------------------------------
   const HANDLE_PX = 9;
+  const CLOSE_PX = 14; // click within this many screen px of the first anchor to close a polygon/road
+  function nearFirst(pts, scr) {
+    if (!pts.length) return false;
+    const p0 = PS.w2s(state.cam, pts[0][0], pts[0][1]);
+    return Math.hypot(p0[0] - scr[0], p0[1] - scr[1]) <= CLOSE_PX;
+  }
   let drag = null; // active drag descriptor
 
   function mouseWorld(e) {
@@ -485,7 +491,7 @@
       const kind = state.tool;
       if (!state._draft || state._draft.type !== "poly" || state._draft.kind !== kind) state._draft = { type: "poly", kind: kind, pts: [], cursor: w };
       const pts = state._draft.pts;
-      if (pts.length >= 3 && Math.hypot(pts[0][0] - w[0], pts[0][1] - w[1]) < 3) { finishPoly(); return; }
+      if (pts.length >= 3 && nearFirst(pts, scr)) { finishPoly(); return; }
       pts.push([w[0], w[1]]); requestDraw(); return;
     }
     // The other drawing tools (roads, parking sections, roundabouts) are manual-only.
@@ -493,14 +499,14 @@
       if (state.tool === "road") {
         if (!state._draft || state._draft.type !== "road") state._draft = { type: "road", pts: [], cursor: w };
         const pts = state._draft.pts;
-        if (pts.length >= 2 && Math.hypot(pts[0][0] - w[0], pts[0][1] - w[1]) < 3) { finishRoad(); return; }
+        if (pts.length >= 2 && nearFirst(pts, scr)) { finishRoad(); return; }
         pts.push([w[0], w[1]]); requestDraw(); return;
       }
       if (state.tool === "section") {
         // Click out anchor points; click the first point again (or dblclick/Enter) to finish.
         if (!state._draft || state._draft.type !== "poly" || state._draft.kind !== "section") state._draft = { type: "poly", kind: "section", pts: [], cursor: w };
         const pts = state._draft.pts;
-        if (pts.length >= 3 && Math.hypot(pts[0][0] - w[0], pts[0][1] - w[1]) < 3) { finishPoly(); return; }
+        if (pts.length >= 3 && nearFirst(pts, scr)) { finishPoly(); return; }
         pts.push([w[0], w[1]]); requestDraw(); return;
       }
       if (state.tool === "round") { state._draft = { type: "round", center: w, r: 0 }; drag = { type: "drawround" }; return; }
@@ -1063,7 +1069,7 @@
       state.sections[state.selection.index][key] = val;
       if (key === "rot") document.getElementById("sec-rot-val").textContent = Math.round(val);
       if (key === "island") document.getElementById("sec-island-val").textContent = val;
-      regen();
+      requestRegen(); // regen + redraw, coalesced per frame → live update while dragging
     }
   }
   segBind("sec-angle-seg", (v) => updateSelSection("angle", parseInt(v, 10)));

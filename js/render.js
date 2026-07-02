@@ -366,6 +366,21 @@
     for (const rb of state.roundabouts || []) { const s = PS.w2s(cam, rb.x, rb.y); ctx.beginPath(); ctx.arc(s[0], s[1], rb.r * cam.scale, 0, Math.PI * 2); ctx.stroke(); }
     ctx.restore();
   }
+  // The first anchor of an in-progress road/polygon: a clear target that fills in
+  // with a pulse ring when the cursor is close enough to CLOSE it (see CLOSE_PX).
+  function drawFirstAnchor(ctx, cam, d, col, minPts) {
+    if (!d.pts || !d.pts.length) return;
+    const s0 = PS.w2s(cam, d.pts[0][0], d.pts[0][1]);
+    const cur = d.cursor ? PS.w2s(cam, d.cursor[0], d.cursor[1]) : null;
+    const closeable = cur && d.pts.length >= minPts && Math.hypot(s0[0] - cur[0], s0[1] - cur[1]) <= 14;
+    if (closeable) {
+      ctx.beginPath(); ctx.arc(s0[0], s0[1], 12, 0, Math.PI * 2);
+      ctx.strokeStyle = col; ctx.globalAlpha = 0.5; ctx.lineWidth = 2; ctx.stroke(); ctx.globalAlpha = 1;
+    }
+    ctx.beginPath(); ctx.arc(s0[0], s0[1], closeable ? 7 : 5, 0, Math.PI * 2);
+    ctx.fillStyle = closeable ? col : "#fff"; ctx.fill();
+    ctx.strokeStyle = col; ctx.lineWidth = closeable ? 2.5 : 1.5; ctx.stroke();
+  }
   function drawManualOverlay(ctx, cam, state) {
     const sel = state.selection;
     for (let i = 0; i < (state.sections || []).length; i++) {
@@ -400,6 +415,7 @@
       if (d.cursor) { const s = PS.w2s(cam, d.cursor[0], d.cursor[1]); ctx.lineTo(s[0], s[1]); }
       ctx.stroke();
       for (const p of d.pts) { const s = PS.w2s(cam, p[0], p[1]); ctx.fillStyle = "#3b5bdb"; ctx.beginPath(); ctx.arc(s[0], s[1], 3, 0, Math.PI * 2); ctx.fill(); }
+      drawFirstAnchor(ctx, cam, d, "#3b5bdb", 2);
     } else if (d && d.type === "poly" && d.pts && d.pts.length) {
       // polygon being clicked out (section = blue, building = green, trace = orange)
       const col = d.kind === "bldg" ? "#2f9e44" : d.kind === "trace" ? "#e8590c" : "#3b5bdb";
@@ -414,6 +430,7 @@
         ctx.setLineDash([5, 4]); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b0[0], b0[1]); ctx.stroke(); ctx.setLineDash([]);
       }
       for (const p of d.pts) { const s = PS.w2s(cam, p[0], p[1]); ctx.fillStyle = col; ctx.beginPath(); ctx.arc(s[0], s[1], 3.5, 0, Math.PI * 2); ctx.fill(); }
+      drawFirstAnchor(ctx, cam, d, col, 3);
     } else if (d && d.type === "round" && d.center && d.r != null) {
       const s = PS.w2s(cam, d.center[0], d.center[1]);
       ctx.strokeStyle = "#3b5bdb"; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(s[0], s[1], Math.max(2, d.r * cam.scale), 0, Math.PI * 2); ctx.stroke();

@@ -700,8 +700,11 @@
 
   // ---- building actions ---------------------------------------------------
   let retailCount = state.buildings.length;
+  // World point at the centre of what's currently on screen (works in map mode
+  // too) — so new buildings/gates land where you're looking, not at world origin.
+  function viewCenterWorld() { return PS.s2w(state.cam, canvas.clientWidth / 2, canvas.clientHeight / 2); }
   function addBuilding() {
-    const c = g.centroid(state.site);
+    const c = viewCenterWorld();
     retailCount++;
     const b = {
       name: "Retail " + retailCount,
@@ -755,8 +758,8 @@
     scheduleSave();
   }
   function addGate(type) {
-    const bb = g.bbox(state.site);
-    state.gates.push({ type, x: (bb.minX + bb.maxX) / 2, y: bb.maxY - 2 });
+    const c = viewCenterWorld();
+    state.gates.push({ type, x: c[0] + (type === "in" ? -8 : 8), y: c[1] });
     state.selection = { type: "gate", index: state.gates.length - 1 };
     syncSelectionUI();
     rebuildNet();

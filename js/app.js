@@ -16,21 +16,9 @@
     ];
   }
 
-  function defaultBuildings() {
-    return [
-      { name: "Retail 1", x: 130, y: 92, w: 64, h: 55, floors: 1, fill: PS.BUILDING_FILLS[0] },
-    ];
-  }
-
-  // Separate, editable entrance ('in') and exit ('out') gates at the bottom edge.
-  function defaultGates(site) {
-    const bb = g.bbox(site);
-    const cx = (bb.minX + bb.maxX) / 2;
-    return [
-      { type: "in", x: cx - bb.w * 0.16, y: bb.maxY - 2 },
-      { type: "out", x: cx + bb.w * 0.16, y: bb.maxY - 2 },
-    ];
-  }
+  // Start blank — the user draws / traces everything themselves.
+  function defaultBuildings() { return []; }
+  function defaultGates() { return []; }
 
   // Deterministic hash in [0,1) from two numbers — stable car occupancy/colours.
   function hash(x, y) {
@@ -145,6 +133,7 @@
       else state.traffic.net = PS.buildNetwork(state);
     }
     updateMetrics();
+    scheduleSave();
   }
 
   function updateMetrics() {
@@ -224,7 +213,7 @@
     const c = g.centroid(state.site);
     state._pin = c;
     state.map.setView([59.334, 18.063], 18); // default: Stockholm
-    state.map.on("move zoom", () => { syncCamFromMap(); requestDraw(); });
+    state.map.on("move zoom", () => { syncCamFromMap(); requestDraw(); scheduleSave(); });
   }
   function setBase(layerKind) {
     if (state._base) { state.map.removeLayer(state._base); state._base = null; }
@@ -328,6 +317,7 @@
     } catch (err) { console.error("[mapGoto]", err); inp.classList.add("notfound"); }
   }
 
+  let pendingMapRestore = null; // saved map view (center/zoom/anchor/pin) to apply once Leaflet loads
   function setBasemap(kind) {
     if (kind === "styled") {
       state.mapMode = false;
@@ -340,9 +330,17 @@
     document.getElementById("map").style.display = "block";
     loadLeaflet().then(() => {
       initMap();
-      state._pin = g.centroid(state.site);
-      state._anchor = state.map.getCenter(); // pin the lot centroid to the current map centre
-      setBase(kind);
+      const m = pendingMapRestore; pendingMapRestore = null;
+      if (m && m.anchor) { // restoring a saved project's exact view + anchor
+        state._anchor = { lat: m.anchor.lat, lng: m.anchor.lng };
+        state._pin = m.pin || g.centroid(state.site);
+        setBase(kind);
+        state.map.setView(m.center, m.zoom, { animate: false });
+      } else {
+        state._pin = g.centroid(state.site);
+        state._anchor = state.map.getCenter(); // pin the lot centroid to the current map centre
+        setBase(kind);
+      }
       state.mapMode = true;
       document.getElementById("map-search").hidden = false;
       state.map.invalidateSize();
@@ -754,6 +752,7 @@
     if (state.traffic.running) state.traffic.rebuild();
     else state.traffic.net = PS.buildNetwork(state);
     requestDraw();
+    scheduleSave();
   }
   function addGate(type) {
     const bb = g.bbox(state.site);
@@ -1004,6 +1003,8 @@
   document.getElementById("btn-fit").addEventListener("click", () => resize(true));
   document.getElementById("btn-reset").addEventListener("click", () => {
     pauseTraffic();
+    localStorage.removeItem(SAVE_KEY); // wipe the auto-saved project too
+    if (state.mapMode) { setBasemap("styled"); segSetActive("base-seg", "styled"); }
     sim.reseed(sim.seed);
     state.site = defaultSite();
     state.buildings = defaultBuildings();
@@ -1077,9 +1078,9 @@
   document.getElementById("sec-rot").addEventListener("input", (e) => updateSelSection("rot", parseFloat(e.target.value)));
   document.getElementById("sec-island").addEventListener("input", (e) => updateSelSection("island", parseInt(e.target.value, 10)));
   document.getElementById("btn-clear-layout").addEventListener("click", () => {
-    state.roads = []; state.sections = []; state.roundabouts = []; state.buildings = []; retailCount = 0;
+    state.roads = []; state.sections = []; state.roundabouts = []; state.buildings = []; state.gates = []; retailCount = 0;
     state._draft = null; state.selection = null;
-    syncSelectionUI(); regen(); requestDraw();
+    syncSelectionUI(); regen(); rebuildNet(); requestDraw();
   });
 
   function rangeBind(id, valId, cb) {
@@ -1245,20 +1246,32 @@
     PS.draw(state); // ensure a fresh frame is on the canvas
     download(`parkering-${state.siteName || "plan"}.png`, canvas.toDataURL("image/png"), false);
   });
-  document.getElementById("btn-export-json").addEventListener("click", () => {
-    const plan = {
+  // ---- project (de)serialisation + auto-save to localStorage --------------
+  const SAVE_KEY = "ps_project_v1";
+  function serializeProject() {
+    return {
       app: "parkeringssimulator", version: 1,
       siteName: state.siteName,
       site: state.site, buildings: state.buildings, gates: state.gates,
-      layoutMode: state.layoutMode, params: state.params, occupancyFrac: state.occupancyFrac,
+      layoutMode: "manual", params: state.params, occupancyFrac: state.occupancyFrac,
       roads: state.roads, sections: state.sections, roundabouts: state.roundabouts,
       traffic: {
         arrivalRate: sim.arrivalRate, dwellMin: sim.dwellMin, speedKmh: sim.speedKmh, tempo: sim.tempo,
         meanAggr: sim.meanAggr, meanCaution: sim.meanCaution, traitSpread: sim.traitSpread, allowOvertake: sim.allowOvertake,
       },
+      map: (state.mapMode && state.map && state._anchor) ? {
+        center: [state.map.getCenter().lat, state.map.getCenter().lng], zoom: state.map.getZoom(),
+        anchor: { lat: state._anchor.lat, lng: state._anchor.lng }, pin: state._pin,
+      } : null,
       report: state._report || null,
     };
-    const blob = new Blob([JSON.stringify(plan, null, 2)], { type: "application/json" });
+  }
+  let saveTimer = 0;
+  function saveProject() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(serializeProject())); } catch (e) { /* quota/private mode */ } }
+  function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(saveProject, 700); }
+
+  document.getElementById("btn-export-json").addEventListener("click", () => {
+    const blob = new Blob([JSON.stringify(serializeProject(), null, 2)], { type: "application/json" });
     download("parkering-plan.json", URL.createObjectURL(blob), true);
   });
   const importFile = document.getElementById("import-file");
@@ -1318,6 +1331,9 @@
     resize(true);
     updateTrafficStats();
     requestDraw();
+    // Restore the map view if the project was saved in map mode.
+    if (p.map && p.map.anchor) { pendingMapRestore = p.map; segSetActive("base-seg", "map"); setBasemap("map"); }
+    else { segSetActive("base-seg", "styled"); }
   }
 
   // Selected-car trait editing.
@@ -1371,8 +1387,16 @@
 
   // ---- boot ---------------------------------------------------------------
   window.PSSTATE = state; // debug/testing handle
-  syncSelectionUI();
-  resize(true);
-  regen();
-  requestDraw();
+  window.addEventListener("beforeunload", saveProject); // persist on close/reload
+  let restored = false;
+  try {
+    const saved = localStorage.getItem(SAVE_KEY);
+    if (saved) { applyPlan(JSON.parse(saved)); restored = true; }
+  } catch (e) { console.warn("[restore]", e); }
+  if (!restored) { // first visit → blank canvas
+    syncSelectionUI();
+    resize(true);
+    regen();
+    requestDraw();
+  }
 })();

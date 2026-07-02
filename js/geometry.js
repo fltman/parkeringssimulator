@@ -157,6 +157,56 @@
       return false;
     },
 
+    // Is point (px,py) inside polygon OR within `pad` of its boundary?
+    // (polygon analogue of pointInRect-with-pad, for polygon buildings.)
+    polyContains(px, py, poly, pad) {
+      if (geom.pointInPolygon([px, py], poly)) return true;
+      return (pad || 0) > 0 && geom.distToBoundary([px, py], poly) < pad;
+    },
+
+    // Parameter t along segment p→p2 where it crosses segment q→q2, or null.
+    segSegT(p, p2, q, q2) {
+      const rx = p2[0] - p[0], ry = p2[1] - p[1];
+      const sx = q2[0] - q[0], sy = q2[1] - q[1];
+      const rxs = rx * sy - ry * sx;
+      if (Math.abs(rxs) < 1e-12) return null;
+      const qpx = q[0] - p[0], qpy = q[1] - p[1];
+      const t = (qpx * sy - qpy * sx) / rxs;
+      const u = (qpx * ry - qpy * rx) / rxs;
+      if (t >= -1e-9 && t <= 1 + 1e-9 && u >= -1e-9 && u <= 1 + 1e-9) return Math.max(0, Math.min(1, t));
+      return null;
+    },
+
+    // Clip segment a→b to a polygon: returns the sub-segments that lie inside.
+    clipSegToPolygon(a, b, poly) {
+      const ts = [0, 1];
+      for (let i = 0, n = poly.length; i < n; i++) {
+        const t = geom.segSegT(a, b, poly[i], poly[(i + 1) % n]);
+        if (t != null) ts.push(t);
+      }
+      ts.sort((x, y) => x - y);
+      const at = (t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+      const out = [];
+      for (let i = 0; i < ts.length - 1; i++) {
+        const t0 = ts[i], t1 = ts[i + 1];
+        if (t1 - t0 < 1e-4) continue;
+        const m = at((t0 + t1) / 2);
+        if (geom.pointInPolygon(m, poly)) out.push([at(t0), at(t1)]);
+      }
+      return out;
+    },
+
+    // Edge midpoint of a polygon nearest a target point (e.g. a building door).
+    polyEdgeMidNearest(poly, target) {
+      let best = null, bd = Infinity;
+      for (let i = 0, n = poly.length; i < n; i++) {
+        const m = [(poly[i][0] + poly[(i + 1) % n][0]) / 2, (poly[i][1] + poly[(i + 1) % n][1]) / 2];
+        const d = Math.hypot(m[0] - target[0], m[1] - target[1]);
+        if (d < bd) { bd = d; best = m; }
+      }
+      return best;
+    },
+
     // Intersection point of two lines (through a-b and c-d). Null if parallel.
     lineIntersect(a, b, c, d) {
       const x1 = a[0], y1 = a[1], x2 = b[0], y2 = b[1];

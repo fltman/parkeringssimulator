@@ -218,9 +218,22 @@
   function drawBuildings(ctx, cam, buildings, selection) {
     for (let i = 0; i < buildings.length; i++) {
       const b = buildings[i];
+      const sel = selection && selection.type === "building" && selection.index === i;
+      if (b.poly && b.poly.length >= 3) {
+        polyPath(ctx, cam, b.poly);
+        ctx.fillStyle = b.fill || BUILDING_FILLS[i % BUILDING_FILLS.length];
+        ctx.fill();
+        ctx.strokeStyle = sel ? COLORS.siteLine : "rgba(60,70,60,0.55)";
+        ctx.lineWidth = sel ? 2.5 : 1.5; ctx.stroke();
+        const c = g.centroid(b.poly), cs = PS.w2s(cam, c[0], c[1]);
+        const gfa = Math.round(g.area(b.poly) * (b.floors || 1));
+        ctx.fillStyle = "rgba(40,50,40,0.85)"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.font = "600 12px system-ui, sans-serif"; ctx.fillText(b.name || "Retail", cs[0], cs[1] - 8);
+        ctx.font = "11px system-ui, sans-serif"; ctx.fillText("BTA " + gfa.toLocaleString() + " m²", cs[0], cs[1] + 8);
+        continue;
+      }
       const s = PS.w2s(cam, b.x + b.w / 2, b.y + b.h / 2);
       const w = b.w * cam.scale, h = b.h * cam.scale;
-      const sel = selection && selection.type === "building" && selection.index === i;
       ctx.save();
       ctx.translate(s[0], s[1]);
       ctx.rotate((b.rot || 0) * Math.PI / 180);
@@ -248,6 +261,11 @@
     const sel = state.selection;
     if (!sel) return;
     if (sel.type === "building" || sel.type === "section") {
+      const item = sel.type === "building" ? state.buildings[sel.index] : state.sections[sel.index];
+      if (item && item.poly && item.poly.length >= 3) { // polygon → anchor handles
+        for (const p of item.poly) hsq(ctx, PS.w2s(cam, p[0], p[1]));
+        return;
+      }
       let cx, cy, w, h, rot;
       if (sel.type === "building") { const b = state.buildings[sel.index]; cx = b.x + b.w / 2; cy = b.y + b.h / 2; w = b.w; h = b.h; rot = b.rot || 0; }
       else { const s = state.sections[sel.index]; cx = s.cx; cy = s.cy; w = s.w; h = s.h; rot = s.rot || 0; }
@@ -336,7 +354,7 @@
     ctx.save();
     if (alpha != null) ctx.globalAlpha = alpha;
     ctx.fillStyle = COLORS.asphalt;
-    for (const sec of state.sections || []) { polyPath(ctx, cam, PS.sectionCorners(sec)); ctx.fill(); }
+    for (const sec of state.sections || []) { polyPath(ctx, cam, sec.poly || PS.sectionCorners(sec)); ctx.fill(); }
     ctx.strokeStyle = COLORS.asphalt; ctx.lineCap = "round"; ctx.lineJoin = "round";
     ctx.lineWidth = Math.max(3, 6.5 * cam.scale);
     for (const r of state.roads || []) {
@@ -351,7 +369,7 @@
   function drawManualOverlay(ctx, cam, state) {
     const sel = state.selection;
     for (let i = 0; i < (state.sections || []).length; i++) {
-      polyPath(ctx, cam, PS.sectionCorners(state.sections[i]));
+      polyPath(ctx, cam, state.sections[i].poly || PS.sectionCorners(state.sections[i]));
       const on = sel && sel.type === "section" && sel.index === i;
       ctx.strokeStyle = on ? COLORS.siteLine : "rgba(59,91,219,0.55)";
       ctx.lineWidth = on ? 2.5 : 1.5;
@@ -382,10 +400,20 @@
       if (d.cursor) { const s = PS.w2s(cam, d.cursor[0], d.cursor[1]); ctx.lineTo(s[0], s[1]); }
       ctx.stroke();
       for (const p of d.pts) { const s = PS.w2s(cam, p[0], p[1]); ctx.fillStyle = "#3b5bdb"; ctx.beginPath(); ctx.arc(s[0], s[1], 3, 0, Math.PI * 2); ctx.fill(); }
-    } else if (d && d.type === "section" && d.p1 && d.p2) {
-      const x = Math.min(d.p1[0], d.p2[0]), y = Math.min(d.p1[1], d.p2[1]), w = Math.abs(d.p2[0] - d.p1[0]), h = Math.abs(d.p2[1] - d.p1[1]);
-      polyPath(ctx, cam, [[x, y], [x + w, y], [x + w, y + h], [x, y + h]]);
-      ctx.strokeStyle = "#3b5bdb"; ctx.lineWidth = 1.5; ctx.setLineDash([6, 4]); ctx.stroke(); ctx.setLineDash([]);
+    } else if (d && d.type === "poly" && d.pts && d.pts.length) {
+      // polygon being clicked out (parking section = blue, building = green)
+      const col = d.kind === "bldg" ? "#2f9e44" : "#3b5bdb";
+      ctx.strokeStyle = col; ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let i = 0; i < d.pts.length; i++) { const s = PS.w2s(cam, d.pts[i][0], d.pts[i][1]); if (i) ctx.lineTo(s[0], s[1]); else ctx.moveTo(s[0], s[1]); }
+      if (d.cursor) { const s = PS.w2s(cam, d.cursor[0], d.cursor[1]); ctx.lineTo(s[0], s[1]); }
+      ctx.stroke();
+      if (d.pts.length >= 2) { // dashed edge closing back to the first anchor
+        const tail = d.cursor || d.pts[d.pts.length - 1];
+        const a = PS.w2s(cam, tail[0], tail[1]), b0 = PS.w2s(cam, d.pts[0][0], d.pts[0][1]);
+        ctx.setLineDash([5, 4]); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b0[0], b0[1]); ctx.stroke(); ctx.setLineDash([]);
+      }
+      for (const p of d.pts) { const s = PS.w2s(cam, p[0], p[1]); ctx.fillStyle = col; ctx.beginPath(); ctx.arc(s[0], s[1], 3.5, 0, Math.PI * 2); ctx.fill(); }
     } else if (d && d.type === "round" && d.center && d.r != null) {
       const s = PS.w2s(cam, d.center[0], d.center[1]);
       ctx.strokeStyle = "#3b5bdb"; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(s[0], s[1], Math.max(2, d.r * cam.scale), 0, Math.PI * 2); ctx.stroke();

@@ -13,6 +13,13 @@
   const PS = (window.PS = window.PS || {});
   const g = PS.geom;
 
+  // Does (px,py) hit building b (rect or polygon), expanded by `pad`?
+  function buildingHit(px, py, b, pad) {
+    if (b.poly && b.poly.length >= 3) return g.polyContains(px, py, b.poly, pad || 0);
+    return g.pointInRect(px, py, b.x + b.w / 2, b.y + b.h / 2, b.w, b.h, b.rot || 0, pad || 0);
+  }
+  PS.buildingHit = buildingHit;
+
   PS.defaults = {
     stallW: 2.5,         // stall width (m)
     stallD: 5.0,         // stall depth (m)
@@ -86,7 +93,7 @@
         if (!g.pointInPolygon(c, site)) return false;
         if (g.distToBoundary(c, site) < p.siteSetback) return false;
         for (const b of buildings) {
-          if (g.pointInRect(c[0], c[1], b.x + b.w / 2, b.y + b.h / 2, b.w, b.h, b.rot || 0, p.buildingClearance)) return false;
+          if (buildingHit(c[0], c[1], b, p.buildingClearance)) return false;
         }
       }
       return true;
@@ -120,9 +127,7 @@
             !nearConnector(alongOf(center)) &&
             g.pointInPolygon(center, site) &&
             g.distToBoundary(center, site) >= Math.max(p.siteSetback, treeR) &&
-            !buildings.some((b) =>
-              g.pointInRect(center[0], center[1], b.x + b.w / 2, b.y + b.h / 2, b.w, b.h, b.rot || 0, p.buildingClearance + treeR)
-            )
+            !buildings.some((b) => buildingHit(center[0], center[1], b, p.buildingClearance + treeR))
           ) {
             trees.push({ x: center[0], y: center[1], r: treeR });
           }
@@ -180,6 +185,26 @@
     const base = Object.assign({}, PS.defaults, state.params, { noConnectors: true });
     const stalls = [], trees = [], aisleLines = [], aisleGroups = [];
     for (const sec of state.sections || []) {
+      // Polygon section: fill the drawn polygon directly (no local-frame rect).
+      if (sec.poly && sec.poly.length >= 3) {
+        const opts = Object.assign({}, base, {
+          orientation: sec.orientation || base.orientation,
+          angle: sec.angle || base.angle, siteSetback: 1.0,
+        });
+        const r = PS.generateParking(sec.poly, state.buildings || [], opts);
+        for (const s of r.stalls) stalls.push({ corners: s.corners, cx: s.cx, cy: s.cy, occupied: false });
+        for (const t of r.trees) trees.push({ x: t.x, y: t.y, r: t.r });
+        // Drive-aisle ladder clipped to the polygon + a centre spine tying rungs.
+        const grp = [];
+        const clip = (ln) => { for (const seg of g.clipSegToPolygon(ln[0], ln[1], sec.poly)) { aisleLines.push(seg); grp.push(seg); } };
+        for (const ln of r.aisleLines || []) clip(ln);
+        for (const rl of r.rails || []) clip(rl);
+        const bb = g.bbox(sec.poly), horiz = (sec.orientation || base.orientation) !== "v";
+        if (horiz) clip([[(bb.minX + bb.maxX) / 2, bb.minY], [(bb.minX + bb.maxX) / 2, bb.maxY]]);
+        else clip([[bb.minX, (bb.minY + bb.maxY) / 2], [bb.maxX, (bb.minY + bb.maxY) / 2]]);
+        aisleGroups.push(grp);
+        continue;
+      }
       const rot = (sec.rot || 0) * Math.PI / 180, cos = Math.cos(rot), sin = Math.sin(rot);
       const w = sec.w, h = sec.h, cx = sec.cx, cy = sec.cy;
       const localPoly = [[-w / 2, -h / 2], [w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]];
@@ -193,7 +218,7 @@
       for (const s of r.stalls) {
         const mid = tf([s.cx, s.cy]);
         let inB = false;
-        for (const b of state.buildings || []) if (g.pointInRect(mid[0], mid[1], b.x + b.w / 2, b.y + b.h / 2, b.w, b.h, b.rot || 0)) { inB = true; break; }
+        for (const b of state.buildings || []) if (buildingHit(mid[0], mid[1], b, 0)) { inB = true; break; }
         if (inB) continue;
         stalls.push({ corners: s.corners.map(tf), cx: mid[0], cy: mid[1], occupied: false });
       }

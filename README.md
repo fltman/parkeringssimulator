@@ -89,8 +89,14 @@ själv — utmärkt ovanpå kartläget för att planera en verklig plats:
 - **Väg**: klicka ut punkter, dubbelklick/Enter avslutar. Vägarna blir körnätet;
   **korsningar skapas automatiskt** där vägar möts.
 - **Rondell**: dra ut en cirkulär väg.
-- **Sektion**: dra en parkeringsyta som fylls med p-platser. Markera den för att
-  ställa **rotation** (rotera hela ytan) och **vinkel** (90/60/45°) samt riktning.
+- **Sektion**: klicka ut ankarpunkter (dubbelklick/Enter avslutar, eller klicka
+  första punkten för att stänga) → en **polygon-parkeringsyta** som fylls med
+  p-platser i den form du ritat. Markera den för **vinkel** (90/60/45°) + riktning.
+- **Byggnad**: klicka ut ankarpunkter → en **polygon-byggnad**. BTA räknas från
+  polygonens area × våningar, och parkeringen viker undan för den. (Eller lägg till
+  en rektangulär byggnad med **+ Lägg till byggnad**.)
+- **Markera + forma om**: med Markör-verktyget kan du markera en byggnad/sektion
+  och **dra dess ankarpunkter** (eller flytta hela ytan).
 - In/utfarter snäpper till närmaste väg; trafiken kör på dina ritade vägar.
 
 ## Analys, betyg & export

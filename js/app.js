@@ -153,7 +153,7 @@
   function updateMetrics() {
     const stalls = state.parking ? state.parking.count : 0;
     let gfa = 0;
-    for (const b of state.buildings) gfa += b.w * b.h * (b.floors || 1);
+    for (const b of state.buildings) gfa += (b.poly ? g.area(b.poly) : b.w * b.h) * (b.floors || 1);
     const area = g.area(state.site); // sf
     const ratio = gfa > 0 ? (stalls / (gfa / 1000)) : 0;
     const occTotal = stalls || 1;
@@ -308,7 +308,22 @@
   function buildingAt(w) {
     for (let i = state.buildings.length - 1; i >= 0; i--) {
       const b = state.buildings[i];
-      if (g.pointInRect(w[0], w[1], b.x + b.w / 2, b.y + b.h / 2, b.w, b.h, b.rot || 0)) return i;
+      if (b.poly && b.poly.length >= 3) { if (g.pointInPolygon(w, b.poly)) return i; }
+      else if (g.pointInRect(w[0], w[1], b.x + b.w / 2, b.y + b.h / 2, b.w, b.h, b.rot || 0)) return i;
+    }
+    return -1;
+  }
+  // Vertex of the currently-selected polygon building/section under the cursor.
+  function polyVertexAt(scr) {
+    const sel = state.selection;
+    if (!sel) return -1;
+    const item = sel.type === "building" ? state.buildings[sel.index]
+      : sel.type === "section" ? state.sections[sel.index] : null;
+    const poly = item && item.poly;
+    if (!poly) return -1;
+    for (let i = 0; i < poly.length; i++) {
+      const s = PS.w2s(state.cam, poly[i][0], poly[i][1]);
+      if (Math.hypot(s[0] - scr[0], s[1] - scr[1]) <= HANDLE_PX + 2) return i;
     }
     return -1;
   }
@@ -317,11 +332,13 @@
     const sel = state.selection;
     if (sel && sel.type === "building") {
       const b = state.buildings[sel.index];
+      if (b.poly) return null; // polygons use anchor handles, not a rect box
       return { cx: b.x + b.w / 2, cy: b.y + b.h / 2, w: b.w, h: b.h, rot: b.rot || 0,
         apply(cx, cy, w, h, rot) { b.w = Math.max(6, w); b.h = Math.max(6, h); b.x = cx - b.w / 2; b.y = cy - b.h / 2; b.rot = rot; } };
     }
     if (sel && sel.type === "section") {
       const s = state.sections[sel.index];
+      if (s.poly) return null;
       return { cx: s.cx, cy: s.cy, w: s.w, h: s.h, rot: s.rot || 0,
         apply(cx, cy, w, h, rot) { s.cx = cx; s.cy = cy; s.w = Math.max(5, w); s.h = Math.max(5, h); s.rot = rot; } };
     }
@@ -403,12 +420,20 @@
         if (pts.length >= 2 && Math.hypot(pts[0][0] - w[0], pts[0][1] - w[1]) < 3) { finishRoad(); return; }
         pts.push([w[0], w[1]]); requestDraw(); return;
       }
-      if (state.tool === "section") { state._draft = { type: "section", p1: w, p2: w }; drag = { type: "drawsection" }; return; }
+      if (state.tool === "section" || state.tool === "bldg") {
+        // Click out anchor points; click the first point again (or dblclick/Enter) to finish.
+        if (!state._draft || state._draft.type !== "poly" || state._draft.kind !== state.tool) state._draft = { type: "poly", kind: state.tool, pts: [], cursor: w };
+        const pts = state._draft.pts;
+        if (pts.length >= 3 && Math.hypot(pts[0][0] - w[0], pts[0][1] - w[1]) < 3) { finishPoly(); return; }
+        pts.push([w[0], w[1]]); requestDraw(); return;
+      }
       if (state.tool === "round") { state._draft = { type: "round", center: w, r: 0 }; drag = { type: "drawround" }; return; }
     }
     // Edit handles of the current selection (resize/rotate a rect, move a road
     // vertex, or a roundabout centre/radius) — checked before re-selecting.
     if (!state.editSite && !(state.layoutMode === "manual" && state.tool !== "select")) {
+      const pv = polyVertexAt(scr);
+      if (pv >= 0) { drag = { type: "polyvertex", vi: pv }; return; }
       const rh = rectHandleAt(scr);
       if (rh) {
         const r = selRect();
@@ -427,8 +452,7 @@
       const si = sectionAt(w);
       if (si >= 0) {
         state.selection = { type: "section", index: si };
-        const sec = state.sections[si];
-        drag = { type: "section", index: si, dx: w[0] - sec.cx, dy: w[1] - sec.cy };
+        drag = { type: "section", index: si, lx: w[0], ly: w[1] };
         syncSelectionUI(); requestDraw(); return;
       }
       const ri = roadAt(w);
@@ -459,8 +483,7 @@
     const bi = buildingAt(w);
     if (bi >= 0) {
       state.selection = { type: "building", index: bi };
-      const b = state.buildings[bi];
-      drag = { type: "move", index: bi, dx: w[0] - b.x, dy: w[1] - b.y };
+      drag = { type: "move", index: bi, lx: w[0], ly: w[1] };
       syncSelectionUI();
       requestDraw();
       return;
@@ -482,6 +505,9 @@
     if (state.layoutMode === "manual" && state.tool === "road" && state._draft && state._draft.type === "road" && !drag) {
       state._draft.cursor = mouseWorld(e); requestDraw(); return;
     }
+    if (state.layoutMode === "manual" && (state.tool === "section" || state.tool === "bldg") && state._draft && state._draft.type === "poly" && !drag) {
+      state._draft.cursor = mouseWorld(e); requestDraw(); return;
+    }
     if (!drag) return;
     if (drag.type === "pan") {
       state.cam.tx = drag.tx + (e.clientX - drag.sx);
@@ -497,9 +523,15 @@
     const w = mouseWorld(e);
     if (drag.type === "move") {
       const b = state.buildings[drag.index];
-      b.x = w[0] - drag.dx;
-      b.y = w[1] - drag.dy;
+      const ddx = w[0] - drag.lx, ddy = w[1] - drag.ly; drag.lx = w[0]; drag.ly = w[1];
+      if (b.poly) b.poly = b.poly.map((p) => [p[0] + ddx, p[1] + ddy]);
+      else { b.x += ddx; b.y += ddy; }
       requestRegen();
+    } else if (drag.type === "polyvertex") {
+      const sel = state.selection;
+      const poly = sel && sel.type === "building" ? state.buildings[sel.index].poly
+        : sel && sel.type === "section" ? state.sections[sel.index].poly : null;
+      if (poly) { poly[drag.vi] = [w[0], w[1]]; requestRegen(); }
     } else if (drag.type === "resizerect") {
       // Drag a corner; the opposite corner stays fixed. Works in the rect's own
       // rotated frame (buildings + sections).
@@ -531,10 +563,10 @@
       requestDraw(); // reroute on drop (mouseup) to avoid thrashing
     } else if (drag.type === "section") {
       const sec = state.sections[drag.index];
-      sec.cx = w[0] - drag.dx; sec.cy = w[1] - drag.dy;
+      const ddx = w[0] - drag.lx, ddy = w[1] - drag.ly; drag.lx = w[0]; drag.ly = w[1];
+      if (sec.poly) sec.poly = sec.poly.map((p) => [p[0] + ddx, p[1] + ddy]);
+      else { sec.cx += ddx; sec.cy += ddy; }
       requestRegen();
-    } else if (drag.type === "drawsection") {
-      state._draft.p2 = w; requestDraw();
     } else if (drag.type === "drawround") {
       state._draft.r = Math.hypot(w[0] - state._draft.center[0], w[1] - state._draft.center[1]); requestDraw();
     }
@@ -543,18 +575,6 @@
   window.addEventListener("mouseup", () => {
     if (drag && drag.type === "pan") canvas.classList.remove("dragging");
     if (drag && (drag.type === "gate" || drag.type === "roadvertex" || drag.type === "roundcenter" || drag.type === "roundradius")) rebuildNet();
-    if (drag && drag.type === "drawsection") {
-      const d = state._draft;
-      if (d) {
-        const w = Math.abs(d.p2[0] - d.p1[0]), h = Math.abs(d.p2[1] - d.p1[1]);
-        if (w > 3 && h > 3) {
-          state.sections.push({ cx: (d.p1[0] + d.p2[0]) / 2, cy: (d.p1[1] + d.p2[1]) / 2, w, h, rot: 0, angle: state.params.angle, orientation: state.params.orientation });
-          state.selection = { type: "section", index: state.sections.length - 1 };
-          syncSelectionUI(); regen();
-        }
-        state._draft = null; requestDraw();
-      }
-    }
     if (drag && drag.type === "drawround") {
       const d = state._draft;
       if (d && d.r > 3) { state.roundabouts.push({ x: d.center[0], y: d.center[1], r: d.r }); rebuildNet(); }
@@ -591,9 +611,13 @@
       e.preventDefault();
     }
     if (e.key === "Enter" && state._draft && state._draft.type === "road") { finishRoad(); e.preventDefault(); }
+    if (e.key === "Enter" && state._draft && state._draft.type === "poly") { finishPoly(); e.preventDefault(); }
     if (e.key === "Escape" && state._draft) { state._draft = null; requestDraw(); }
   });
-  canvas.addEventListener("dblclick", () => { if (state._draft && state._draft.type === "road") finishRoad(); });
+  canvas.addEventListener("dblclick", () => {
+    if (state._draft && state._draft.type === "road") finishRoad();
+    else if (state._draft && state._draft.type === "poly") finishPoly();
+  });
 
   // ---- building actions ---------------------------------------------------
   let retailCount = state.buildings.length;
@@ -666,6 +690,7 @@
   }
   // ---- manual layout helpers ----
   function pointInSection(w, sec) {
+    if (sec.poly && sec.poly.length >= 3) return g.pointInPolygon(w, sec.poly);
     const rot = -(sec.rot || 0) * Math.PI / 180, cos = Math.cos(rot), sin = Math.sin(rot);
     const dx = w[0] - sec.cx, dy = w[1] - sec.cy;
     const lx = dx * cos - dy * sin, ly = dx * sin + dy * cos;
@@ -682,6 +707,23 @@
     }
     state._draft = null;
     requestDraw();
+  }
+  // Finish a clicked-out polygon → a building or a parking section.
+  function finishPoly() {
+    const d = state._draft;
+    if (d && d.type === "poly" && d.pts.length >= 3) {
+      const poly = d.pts.map((p) => [p[0], p[1]]);
+      if (d.kind === "bldg") {
+        retailCount++;
+        state.buildings.push({ name: "Retail " + retailCount, poly, floors: 1, fill: PS.BUILDING_FILLS[(retailCount - 1) % PS.BUILDING_FILLS.length] });
+        state.selection = { type: "building", index: state.buildings.length - 1 };
+      } else {
+        state.sections.push({ poly, angle: state.params.angle, orientation: state.params.orientation });
+        state.selection = { type: "section", index: state.sections.length - 1 };
+      }
+      syncSelectionUI(); regen();
+    }
+    state._draft = null; requestDraw();
   }
 
   function syncSelectionUI() {
@@ -700,6 +742,7 @@
     secPanel.hidden = !selS;
     if (selS) {
       const sec = state.sections[sel.index];
+      document.getElementById("sec-rot-field").hidden = !!sec.poly; // polygons: edit anchors, no rot slider
       document.getElementById("sec-rot").value = sec.rot || 0;
       document.getElementById("sec-rot-val").textContent = Math.round(sec.rot || 0);
       segSetActive("sec-angle-seg", String(sec.angle || 90));

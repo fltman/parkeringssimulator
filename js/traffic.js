@@ -201,9 +201,10 @@
     if (!entrances.length && exits.length) entrances.push(exits[0]);
     if (!exits.length && entrances.length) exits.push(entrances[0]);
 
-    // Building doors: edge midpoint nearest the lot centroid.
+    // Building doors: edge midpoint nearest the lot centroid (rect or polygon).
     const centroid = g.centroid(site);
     const doors = buildings.map((b) => {
+      if (b.poly && b.poly.length >= 3) return g.polyEdgeMidNearest(b.poly, centroid);
       const mids = g.rectPoints(b.x + b.w / 2, b.y + b.h / 2, b.w, b.h, b.rot || 0, true);
       let best = mids[0], bd = Infinity;
       for (const m of mids) {
@@ -340,6 +341,7 @@
 
     const centroid = g.centroid(state.site);
     const doors = (state.buildings || []).map((b) => {
+      if (b.poly && b.poly.length >= 3) return g.polyEdgeMidNearest(b.poly, centroid);
       const mids = g.rectPoints(b.x + b.w / 2, b.y + b.h / 2, b.w, b.h, b.rot || 0, true);
       let best = mids[0], bd = Infinity;
       for (const m of mids) { const d = Math.hypot(m[0] - centroid[0], m[1] - centroid[1]); if (d < bd) { bd = d; best = m; } }

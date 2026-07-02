@@ -71,17 +71,18 @@
                   <button data-v="select" class="on">Markör</button>
                   <button data-v="road">Väg</button>
                   <button data-v="section">Sektion</button>
+                  <button data-v="bldg">Byggnad</button>
                   <button data-v="round">Rondell</button>
                 </div>
               </div>
-              <p class="hint">Väg: klicka punkter, dubbelklick eller Enter avslutar. Sektion/Rondell: dra. Korsningar skapas där vägar möts.</p>
+              <p class="hint">Väg / Sektion / Byggnad: klicka ut ankarpunkter, dubbelklick eller Enter avslutar (klicka första punkten för att stänga). Rondell: dra. Markera en yta för att dra dess ankarpunkter. Korsningar skapas där vägar möts.</p>
               <div class="row"><button id="btn-clear-layout" class="ghost">Rensa layout</button></div>
             </div>
           </section>
 
           <section id="sel-section" hidden>
             <h2>Vald sektion</h2>
-            <div class="field">
+            <div class="field" id="sec-rot-field">
               <label>Rotation: <span id="sec-rot-val">0</span>°</label>
               <input type="range" id="sec-rot" min="0" max="180" step="1" value="0" />
             </div>
@@ -264,11 +265,11 @@
       </div>
     </div>
 
-    <script src="js/geometry.js?v=39"></script>
-    <script src="js/parking.js?v=39"></script>
-    <script src="js/traffic.js?v=39"></script>
-    <script src="js/render.js?v=39"></script>
-    <script src="js/report.js?v=39"></script>
-    <script src="js/app.js?v=39"></script>
+    <script src="js/geometry.js?v=40"></script>
+    <script src="js/parking.js?v=40"></script>
+    <script src="js/traffic.js?v=40"></script>
+    <script src="js/render.js?v=40"></script>
+    <script src="js/report.js?v=40"></script>
+    <script src="js/app.js?v=40"></script>
   </body>
 </html>

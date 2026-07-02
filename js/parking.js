@@ -198,6 +198,7 @@
         const opts = Object.assign({}, base, {
           orientation: sec.orientation || base.orientation,
           angle: sec.angle || base.angle, siteSetback: 1.0,
+          islandEvery: sec.island != null ? sec.island : base.islandEvery,
         });
         const r = PS.generateParking(localPoly, [], opts); // fill in the un-rotated frame
         for (const s of r.stalls) {
@@ -226,6 +227,7 @@
         orientation: sec.orientation || base.orientation,
         angle: sec.angle || base.angle,
         siteSetback: 1.0,
+        islandEvery: sec.island != null ? sec.island : base.islandEvery,
       });
       const r = PS.generateParking(localPoly, [], opts); // fill local rect (buildings handled after)
       const tf = (pt) => [cx + pt[0] * cos - pt[1] * sin, cy + pt[0] * sin + pt[1] * cos];

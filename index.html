@@ -13,7 +13,7 @@
           <span class="logo">▚</span>
           <div>
             <h1>Parkeringssimulator</h1>
-            <p class="tagline">Rita tomten, släpp in byggnader — parkeringen löses om i realtid.</p>
+            <p class="tagline">Rita vägar, parkeringssektioner och byggnader — planera parkeringen själv, med trafik i realtid.</p>
           </div>
         </div>
         <div class="metrics" id="metrics">
@@ -49,7 +49,7 @@
               <div class="row">
                 <button id="btn-del" class="ghost" disabled>Ta bort markerad</button>
               </div>
-              <p class="hint" id="sel-hint">"+ Byggnad" ger en fyrkant att flytta / skala / rotera. "Rita" ritar en byggnad som polygon (klicka ut hörn, dubbelklick avslutar). Fungerar i både automatiskt och manuellt läge.</p>
+              <p class="hint" id="sel-hint">"+ Byggnad" ger en fyrkant att flytta / skala / rotera. "Rita" ritar en byggnad som polygon (klicka ut hörn, dubbelklick avslutar).</p>
               <div class="field" id="floors-field" hidden>
                 <label>Våningar: <span id="floors-val">1</span></label>
                 <input type="range" id="floors" min="1" max="6" step="1" value="1" />
@@ -66,27 +66,18 @@
             </section>
 
             <section>
-              <h2>Parkeringsläge</h2>
+              <h2>Layout</h2>
               <div class="field">
-                <div class="seg" id="layout-seg">
-                  <button data-v="auto" class="on">Automatisk</button>
-                  <button data-v="manual">Manuell</button>
+                <label>Verktyg</label>
+                <div class="toolgrid" id="tool-seg">
+                  <button data-v="select" class="on">Markör</button>
+                  <button data-v="road">Väg</button>
+                  <button data-v="section">Sektion</button>
+                  <button data-v="round">Rondell</button>
                 </div>
               </div>
-              <p class="hint">Automatisk: parkeringen fylls över hela tomten runt byggnaderna (styrs av inställningarna nedan). Manuell: du ritar vägar, parkeringssektioner och rondeller själv.</p>
-              <div id="manual-tools" hidden>
-                <div class="field">
-                  <label>Verktyg</label>
-                  <div class="toolgrid" id="tool-seg">
-                    <button data-v="select" class="on">Markör</button>
-                    <button data-v="road">Väg</button>
-                    <button data-v="section">Sektion</button>
-                    <button data-v="round">Rondell</button>
-                  </div>
-                </div>
-                <p class="hint">Väg / Sektion: klicka ut ankarpunkter, dubbelklick eller Enter avslutar (klicka första punkten för att stänga). Rondell: dra. Markera en yta för att dra dess ankarpunkter; dubbelklick på en kant lägger till en ny punkt. Korsningar skapas där vägar möts.</p>
-                <div class="row"><button id="btn-clear-layout" class="ghost">Rensa layout</button></div>
-              </div>
+              <p class="hint">Väg / Sektion: klicka ut ankarpunkter, dubbelklick eller Enter avslutar (klicka första punkten för att stänga). Rondell: dra. Markera en yta för att dra dess ankarpunkter; dubbelklick på en kant lägger till en ny punkt. Vinkel/riktning/grönska ställs per yta under "Vald sektion".</p>
+              <div class="row"><button id="btn-clear-layout" class="ghost">Rensa layout</button></div>
             </section>
 
             <section id="sel-section" hidden>
@@ -110,32 +101,9 @@
                   <button data-v="v">Tvärs</button>
                 </div>
               </div>
-            </section>
-
-            <section>
-              <h2>Parkeringslayout</h2>
               <div class="field">
-                <label>Vinkel</label>
-                <div class="seg" id="angle-seg">
-                  <button data-v="90" class="on">90°</button>
-                  <button data-v="60">60°</button>
-                  <button data-v="45">45°</button>
-                </div>
-              </div>
-              <div class="field">
-                <label>Riktning</label>
-                <div class="seg" id="orient-seg">
-                  <button data-v="h" class="on">Öst–väst</button>
-                  <button data-v="v">Nord–syd</button>
-                </div>
-              </div>
-              <div class="field">
-                <label>Kantzon (setback): <span id="setback-val">5</span> m</label>
-                <input type="range" id="setback" min="1" max="15" step="1" value="5" />
-              </div>
-              <div class="field">
-                <label>Grönska var: <span id="island-val">11</span>:e plats</label>
-                <input type="range" id="island" min="4" max="30" step="1" value="11" />
+                <label>Grönska var: <span id="sec-island-val">11</span>:e plats</label>
+                <input type="range" id="sec-island" min="4" max="30" step="1" value="11" />
               </div>
             </section>
 
@@ -281,11 +249,11 @@
       </div>
     </div>
 
-    <script src="js/geometry.js?v=44"></script>
-    <script src="js/parking.js?v=44"></script>
-    <script src="js/traffic.js?v=44"></script>
-    <script src="js/render.js?v=44"></script>
-    <script src="js/report.js?v=44"></script>
-    <script src="js/app.js?v=44"></script>
+    <script src="js/geometry.js?v=46"></script>
+    <script src="js/parking.js?v=46"></script>
+    <script src="js/traffic.js?v=46"></script>
+    <script src="js/render.js?v=46"></script>
+    <script src="js/report.js?v=46"></script>
+    <script src="js/app.js?v=46"></script>
   </body>
 </html>

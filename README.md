@@ -2,10 +2,10 @@
 
 [![Patreon](https://img.shields.io/badge/Patreon-AndersBjarby-F96854?logo=patreon&logoColor=white)](https://www.patreon.com/AndersBjarby)
 
-En interaktiv parkeringsplats-/tomtplanerare **och trafikmikrosimulering** i
-webbläsaren, byggd som en hyllning till klippet i `paRkeringsimulator.mp4`: en
-topdown-karta där du släpper in byggnader och parkeringen **löses om i realtid**,
-och där du kan **köra trafik** för att se var det kör ihop sig.
+En interaktiv parkerings-/tomtplanerare **och trafikmikrosimulering** i
+webbläsaren: en topdown-vy (stiliserad eller på riktig karta) där du **ritar
+vägar, parkeringssektioner och byggnader själv** — varje parkeringsyta fylls med
+platser i realtid — och sedan **kör trafik** för att se var det kör ihop sig.
 
 Allt är metriskt (meter, m², hektar) och helt beroendefritt (vanlig HTML/CSS/JS,
 inget byggsteg).
@@ -23,24 +23,30 @@ bumpa siffran om en JS-ändring inte slår igenom.
 
 ## Planeraren
 
-- **Automatisk parkeringslösare** – fyller tomten med dubbelradiga fickor
-  (2,5 × 5,0 m platser, 6,5 m körgång), **karvar ur rena tvärgator** där bilar
-  kör, släpper stall utanför kantzonen eller mot byggnader, och räknar platserna.
-- **Släpp in byggnader** – lägg till / flytta / skala / ta bort. Parkeringen
-  genereras om runt varje byggnad; våningar styr BTA.
-- **Layout** – 90 / 60 / 45° vinkel, öst–väst / nord–syd körgångar, justerbar
-  kantzon och grönsketäthet.
+Du ritar planen själv (verktygen **Väg / Sektion / Rondell** + **Byggnad**). Varje
+**parkeringssektion** är en polygon du klickar ut, och den **fylls med dubbelradiga
+fickor** i realtid (2,5 × 5,0 m platser, 6,5 m körgång) med interna körgångar som
+kopplas in i vägnätet.
+
+- **Rita parkeringssektioner** – klicka ut en polygon; den fylls med platser i den
+  form du ritat. Per yta (i **Vald sektion**) ställer du **vinkel** (90 / 60 / 45°),
+  **riktning** (längs/tvärs), **grönsketäthet** och **rotation av parkeringen inuti
+  formen**. Markera + dra ankarpunkter, eller dubbelklicka en kant för en ny punkt.
+- **Byggnader** – **+ Byggnad** ger en fyrkant (flytta / skala / rotera) eller
+  **✏️ Rita** en polygon-byggnad. Parkeringen viker undan för byggnader; våningar
+  styr BTA.
+- **Vägar & rondeller** – vägarna blir körnätet, korsningar skapas där de möts,
+  rondeller är enkelriktade. In-/utfarter (IN/UT) snäpper till närmaste väg.
 - **Nyckeltal** – p-platser, platser/1000 m² BTA, BTA, tomtareal (ha), beläggning.
 - Pan (dra tom yta), zoom (skrollhjul), måttlinjer och redigerbar tomtgräns.
 
 ## Trafikmikrosimuleringen
 
-Bilar kommer in vid en av **två infarter (IN/UT)**, ruttas (Dijkstra) längs
-körgångsnätet + en **perimeterslinga** till en ledig plats **så nära sin
-målbyggnad som möjligt**, följer bilen framför (köer/spillback uppstår av sig
-själva), parkerar, och kör ut. En **fotgängare** går från platsen till byggnadens
-entré, handlar, går tillbaka — och först då kör bilen ut (gångturen styr
-uppehållstiden).
+Bilar kommer in vid en **infart (IN)**, ruttas (Dijkstra) längs ditt ritade
+körgångs-/vägnät till en ledig plats **så nära sin målbyggnad som möjligt**,
+följer bilen framför (köer/spillback uppstår av sig själva), parkerar, och kör ut
+via en **utfart (UT)**. En **fotgängare** går från platsen till byggnadens entré,
+handlar, går tillbaka — och först då kör bilen ut (gångturen styr uppehållstiden).
 
 **Så ser man var det kör ihop sig:** trafikvärmekarta på körgångarna
 (grön→gul→röd) + **röd pulsring på värsta flaskhalsen**, plus live-statistik
@@ -83,24 +89,27 @@ kartläge ritas parkeringen genomskinligt ovanpå den riktiga marken i korrekt s
 panorera/zooma kartan för att lägga tomten över en verklig fastighet. Kräver
 internet för kartrutor; stiliserat läge funkar offline.
 
-## Manuell layout (rita själv)
-Under **Layout** kan du växla **Auto ⇄ Manuell**. I manuellt läge ritar du planen
-själv — utmärkt ovanpå kartläget för att planera en verklig plats:
+## Rita layouten
+Du ritar hela planen själv (utmärkt ovanpå kartläget för att planera en verklig
+plats). Verktygen finns under **Layout**:
 - **Väg**: klicka ut punkter, dubbelklick/Enter avslutar. Vägarna blir körnätet;
   **korsningar skapas automatiskt** där vägar möts.
-- **Rondell**: dra ut en cirkulär väg.
+- **Rondell**: dra ut en cirkulär (enkelriktad) väg.
 - **Sektion**: klicka ut ankarpunkter (dubbelklick/Enter avslutar, eller klicka
   första punkten för att stänga) → en **polygon-parkeringsyta** som fylls med
-  p-platser i den form du ritat. Markera den för att **rotera parkeringen** inuti
-  formen samt sätta **vinkel** (90/60/45°) + riktning.
-- **Markera + forma om**: med Markör-verktyget kan du markera en byggnad/sektion,
-  **dra dess ankarpunkter** (eller flytta hela ytan) och **dubbelklicka på en kant
-  för att lägga till en ny punkt**.
+  p-platser i den form du ritat. Markera den (**Vald sektion**) för att sätta
+  **rotation av parkeringen** inuti formen, **vinkel** (90/60/45°), riktning och
+  grönsketäthet.
+- **Byggnader** görs i **Byggnader**-panelen (**+ Byggnad** för en fyrkant, **✏️
+  Rita** för en polygon), inte bland ritverktygen.
+- **Markera + forma om**: med Markör-verktyget markerar du en byggnad/sektion,
+  **drar dess ankarpunkter** (eller flyttar hela ytan) och **dubbelklickar på en
+  kant för att lägga till en ny punkt**.
+- In-/utfarter snäpper till närmaste väg; trafiken kör på dina ritade vägar.
 
-Byggnader hör inte till de manuella verktygen — de görs i **Byggnader**-panelen
-(**+ Byggnad** för en fyrkant, **✏️ Rita** för en polygon) och gäller i både
-automatiskt och manuellt läge.
-- In/utfarter snäpper till närmaste väg; trafiken kör på dina ritade vägar.
+Tomtgränsen (parcellen) är dold som standard — slå på **Redigera tomtgräns** under
+Vy för att se och forma om den. Den ger sammanhang (kringliggande gator) men
+begränsar inte var du ritar.
 
 ## Analys, betyg & export
 Klicka **Analysera layouten** för att köra en kort, deterministisk trafik­benchmark

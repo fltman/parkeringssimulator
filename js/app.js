@@ -111,8 +111,8 @@
     mapMode: false,
     map: null,
     _pin: null,
-    layoutMode: "auto",   // 'auto' | 'manual'
-    tool: "select",       // manual tools: 'select' | 'road' | 'section' | 'round'
+    layoutMode: "manual", // manual-only: you draw roads / sections / roundabouts
+    tool: "select",       // tools: 'select' | 'road' | 'section' | 'round' | 'bldg'
     roads: [],
     sections: [],
     roundabouts: [],
@@ -139,9 +139,7 @@
 
   function regen() {
     state._analysisWorst = null; // geometry changed → the pinned bottleneck is stale
-    state.parking = state.layoutMode === "manual"
-      ? PS.generateManual(state)
-      : PS.generateParking(state.site, state.buildings, state.params);
+    state.parking = PS.generateManual(state); // manual-only: fill the drawn sections
     applyOccupancy();
     if (state.traffic) {
       if (state.traffic.running) state.traffic.rebuild();
@@ -760,7 +758,7 @@
         state.buildings.push({ name: "Retail " + retailCount, poly, floors: 1, fill: PS.BUILDING_FILLS[(retailCount - 1) % PS.BUILDING_FILLS.length] });
         state.selection = { type: "building", index: state.buildings.length - 1 };
       } else {
-        state.sections.push({ poly, angle: state.params.angle, orientation: state.params.orientation });
+        state.sections.push({ poly, angle: 90, orientation: "h", island: 11 });
         state.selection = { type: "section", index: state.sections.length - 1 };
       }
       syncSelectionUI(); regen();
@@ -798,6 +796,9 @@
       document.getElementById("sec-rot-val").textContent = Math.round(sec.rot || 0);
       segSetActive("sec-angle-seg", String(sec.angle || 90));
       segSetActive("sec-orient-seg", sec.orientation || "h");
+      const isl = sec.island != null ? sec.island : 11;
+      document.getElementById("sec-island").value = isl;
+      document.getElementById("sec-island-val").textContent = isl;
     }
   }
 
@@ -929,9 +930,7 @@
     state.buildings = defaultBuildings();
     state.gates = defaultGates(state.site);
     state.roads = []; state.sections = []; state.roundabouts = [];
-    state.layoutMode = "auto"; state.tool = "select"; state._draft = null;
-    document.getElementById("manual-tools").hidden = true;
-    segSetActive("layout-seg", "auto");
+    state.layoutMode = "manual"; state.tool = "select"; state._draft = null;
     segSetActive("tool-seg", "select");
     document.getElementById("btn-draw-bldg").classList.remove("primary");
     retailCount = state.buildings.length;
@@ -960,13 +959,11 @@
     const seg = document.getElementById(id);
     seg.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.v === v));
   }
-  segBind("angle-seg", (v) => { state.params.angle = parseInt(v, 10); regen(); requestDraw(); });
-  segBind("orient-seg", (v) => { state.params.orientation = v; regen(); requestDraw(); });
   segBind("base-seg", (v) => setBasemap(v));
 
-  // Active drawing tool. "bldg" (draw a polygon building) works in both automatic
-  // and manual mode; the rest are manual tools. Keeps the tool-seg and the "Rita"
-  // button highlight in sync.
+  // Active drawing tool. "bldg" (draw a polygon building) works via the Byggnader
+  // panel; the rest are the layout drawing tools. Keeps the tool-seg and the
+  // "Rita" button highlight in sync.
   function setTool(v) {
     state.tool = v;
     segSetActive("tool-seg", v); // clears highlight when v isn't in the seg (e.g. "bldg")
@@ -976,20 +973,6 @@
     requestDraw();
   }
 
-  function setLayoutMode(mode) {
-    state.layoutMode = mode;
-    document.getElementById("manual-tools").hidden = mode !== "manual";
-    state.tool = "select";
-    segSetActive("tool-seg", "select");
-    document.getElementById("btn-draw-bldg").classList.remove("primary");
-    state._draft = null;
-    state.selection = null;
-    syncSelectionUI();
-    regen();
-    if (state.traffic) { if (state.traffic.running) state.traffic.rebuild(); else state.traffic.net = PS.buildNetwork(state); }
-    requestDraw();
-  }
-  segBind("layout-seg", (v) => setLayoutMode(v));
   segBind("tool-seg", (v) => setTool(v));
   document.getElementById("btn-draw-bldg").addEventListener("click", () => setTool(state.tool === "bldg" ? "select" : "bldg"));
 
@@ -997,12 +980,14 @@
     if (state.selection && state.selection.type === "section") {
       state.sections[state.selection.index][key] = val;
       if (key === "rot") document.getElementById("sec-rot-val").textContent = Math.round(val);
+      if (key === "island") document.getElementById("sec-island-val").textContent = val;
       regen();
     }
   }
   segBind("sec-angle-seg", (v) => updateSelSection("angle", parseInt(v, 10)));
   segBind("sec-orient-seg", (v) => updateSelSection("orientation", v));
   document.getElementById("sec-rot").addEventListener("input", (e) => updateSelSection("rot", parseFloat(e.target.value)));
+  document.getElementById("sec-island").addEventListener("input", (e) => updateSelSection("island", parseInt(e.target.value, 10)));
   document.getElementById("btn-clear-layout").addEventListener("click", () => {
     state.roads = []; state.sections = []; state.roundabouts = []; state._draft = null;
     state.selection = null; syncSelectionUI(); regen(); requestDraw();
@@ -1016,8 +1001,6 @@
       cb(parseFloat(el.value));
     });
   }
-  rangeBind("setback", "setback-val", (v) => { state.params.siteSetback = v; requestRegen(); });
-  rangeBind("island", "island-val", (v) => { state.params.islandEvery = v; requestRegen(); });
   rangeBind("occ", "occ-val", (v) => {
     state.occupancyFrac = v / 100;
     applyOccupancy();
@@ -1213,7 +1196,7 @@
     state.roads = p.roads || [];
     state.sections = p.sections || [];
     state.roundabouts = p.roundabouts || [];
-    state.layoutMode = p.layoutMode === "manual" ? "manual" : "auto";
+    state.layoutMode = "manual";
     if (p.params) Object.assign(state.params, p.params);
     if (typeof p.occupancyFrac === "number") state.occupancyFrac = p.occupancyFrac;
     const t = p.traffic || {};
@@ -1226,14 +1209,8 @@
     if (t.traitSpread != null) sim.traitSpread = t.traitSpread;
     if (t.allowOvertake != null) sim.allowOvertake = t.allowOvertake;
     // Sync all the panel controls to the imported values.
-    segSetActive("layout-seg", state.layoutMode);
-    document.getElementById("manual-tools").hidden = state.layoutMode !== "manual";
     segSetActive("tool-seg", "select"); state.tool = "select";
     document.getElementById("btn-draw-bldg").classList.remove("primary");
-    segSetActive("angle-seg", String(state.params.angle));
-    segSetActive("orient-seg", state.params.orientation);
-    setSlider("setback", "setback-val", state.params.siteSetback);
-    setSlider("island", "island-val", state.params.islandEvery);
     setSlider("occ", "occ-val", Math.round(state.occupancyFrac * 100));
     setSlider("arr", "arr-val", sim.arrivalRate);
     setSlider("dwell", "dwell-val", sim.dwellMin);

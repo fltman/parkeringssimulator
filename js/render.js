@@ -459,7 +459,9 @@
     }
     drawBuildings(ctx, cam, state.buildings, state.selection);
     if (manual) drawManualOverlay(ctx, cam, state);
-    else drawSiteOutline(ctx, cam, state.site, state.editSite);
+    // The parcel boundary is only shown while editing it (otherwise it's just
+    // context for decor/gates and would clutter the free-draw canvas).
+    if (state.editSite) drawSiteOutline(ctx, cam, state.site, true);
     if (state.traffic && PS.drawGates) PS.drawGates(ctx, cam, state);
     if (PS.drawHandles) PS.drawHandles(ctx, cam, state);
     if (state._analysisWorst) drawAnalysisMarker(ctx, cam, state._analysisWorst);

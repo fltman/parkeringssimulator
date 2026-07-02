@@ -96,6 +96,7 @@ html, body {
 #project-name:focus { outline: none; border-color: var(--accent); }
 #project-select { flex: 1; min-width: 0; padding: 6px 8px; font: inherit; font-size: 12.5px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink); }
 #project-bar button { padding: 6px 10px; font-size: 13px; flex: 0 0 auto; }
+#btn-del-project.danger { background: #e03131; color: #fff; border-color: #e03131; }
 #save-status { font-size: 11px; color: var(--muted); white-space: nowrap; opacity: 0; transition: opacity 0.2s; }
 #save-status.show { opacity: 1; }
 #save-status.saved { color: #2f9e44; }

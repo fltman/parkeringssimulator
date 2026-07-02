@@ -775,7 +775,7 @@
     secPanel.hidden = !selS;
     if (selS) {
       const sec = state.sections[sel.index];
-      document.getElementById("sec-rot-field").hidden = !!sec.poly; // polygons: edit anchors, no rot slider
+      document.getElementById("sec-rot-field").hidden = false; // rect: rotate area; polygon: rotate parking inside it
       document.getElementById("sec-rot").value = sec.rot || 0;
       document.getElementById("sec-rot-val").textContent = Math.round(sec.rot || 0);
       segSetActive("sec-angle-seg", String(sec.angle || 90));

@@ -185,23 +185,37 @@
     const base = Object.assign({}, PS.defaults, state.params, { noConnectors: true });
     const stalls = [], trees = [], aisleLines = [], aisleGroups = [];
     for (const sec of state.sections || []) {
-      // Polygon section: fill the drawn polygon directly (no local-frame rect).
+      // Polygon section: fill the drawn polygon directly. `sec.rot` rotates the
+      // PARKING (rows/aisles) inside the fixed polygon — fill axis-aligned in a
+      // frame rotated by -rot about the centroid, then rotate the result back.
       if (sec.poly && sec.poly.length >= 3) {
+        const rotDeg = sec.rot || 0, c = g.centroid(sec.poly);
+        const a = rotDeg * Math.PI / 180, cs = Math.cos(a), sn = Math.sin(a);
+        const toLocal = (p) => { const dx = p[0] - c[0], dy = p[1] - c[1]; return [c[0] + dx * cs + dy * sn, c[1] - dx * sn + dy * cs]; };
+        const toWorld = (p) => { const dx = p[0] - c[0], dy = p[1] - c[1]; return [c[0] + dx * cs - dy * sn, c[1] + dx * sn + dy * cs]; };
+        const W = rotDeg ? toWorld : (p) => p;
+        const localPoly = rotDeg ? sec.poly.map(toLocal) : sec.poly;
         const opts = Object.assign({}, base, {
           orientation: sec.orientation || base.orientation,
           angle: sec.angle || base.angle, siteSetback: 1.0,
         });
-        const r = PS.generateParking(sec.poly, state.buildings || [], opts);
-        for (const s of r.stalls) stalls.push({ corners: s.corners, cx: s.cx, cy: s.cy, occupied: false });
-        for (const t of r.trees) trees.push({ x: t.x, y: t.y, r: t.r });
-        // Drive-aisle ladder clipped to the polygon + a centre spine tying rungs.
+        const r = PS.generateParking(localPoly, [], opts); // fill in the un-rotated frame
+        for (const s of r.stalls) {
+          const mid = W([s.cx, s.cy]);
+          let inB = false;
+          for (const b of state.buildings || []) if (buildingHit(mid[0], mid[1], b, base.buildingClearance)) { inB = true; break; }
+          if (inB) continue;
+          stalls.push({ corners: s.corners.map(W), cx: mid[0], cy: mid[1], occupied: false });
+        }
+        for (const t of r.trees) { const p = W([t.x, t.y]); trees.push({ x: p[0], y: p[1], r: t.r }); }
+        // Drive-aisle ladder → world, then clipped to the polygon + a centre spine.
         const grp = [];
-        const clip = (ln) => { for (const seg of g.clipSegToPolygon(ln[0], ln[1], sec.poly)) { aisleLines.push(seg); grp.push(seg); } };
-        for (const ln of r.aisleLines || []) clip(ln);
-        for (const rl of r.rails || []) clip(rl);
-        const bb = g.bbox(sec.poly), horiz = (sec.orientation || base.orientation) !== "v";
-        if (horiz) clip([[(bb.minX + bb.maxX) / 2, bb.minY], [(bb.minX + bb.maxX) / 2, bb.maxY]]);
-        else clip([[bb.minX, (bb.minY + bb.maxY) / 2], [bb.maxX, (bb.minY + bb.maxY) / 2]]);
+        const clipW = (ln) => { for (const seg of g.clipSegToPolygon(W(ln[0]), W(ln[1]), sec.poly)) { aisleLines.push(seg); grp.push(seg); } };
+        for (const ln of r.aisleLines || []) clipW(ln);
+        for (const rl of r.rails || []) clipW(rl);
+        const bb = g.bbox(localPoly), horiz = (sec.orientation || base.orientation) !== "v";
+        if (horiz) clipW([[(bb.minX + bb.maxX) / 2, bb.minY], [(bb.minX + bb.maxX) / 2, bb.maxY]]);
+        else clipW([[bb.minX, (bb.minY + bb.maxY) / 2], [bb.maxX, (bb.minY + bb.maxY) / 2]]);
         aisleGroups.push(grp);
         continue;
       }

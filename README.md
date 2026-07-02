@@ -107,9 +107,12 @@ plats). Verktygen finns under **Layout**:
   kant för att lägga till en ny punkt**.
 - In-/utfarter snäpper till närmaste väg; trafiken kör på dina ritade vägar.
 
-Tomtgränsen (parcellen) är dold som standard — slå på **Redigera tomtgräns** under
-Vy för att se och forma om den. Den ger sammanhang (kringliggande gator) men
-begränsar inte var du ritar.
+### Trace från kartan (OpenStreetMap)
+I kartläget (**Vy → Karta**): klicka **🗺️ Trace från kartan**, rita en yta, och
+appen hämtar **verkliga byggnader och vägar** inom ytan från OpenStreetMap
+(Overpass API) och lägger in dem i planen — byggnader som polygoner (med BTA från
+`building:levels`), vägar som körnät. Sedan ritar du parkering ovanpå en riktig
+plats. Kräver nät; data © OpenStreetMap.
 
 ## Analys, betyg & export
 Klicka **Analysera layouten** för att köra en kort, deterministisk trafik­benchmark

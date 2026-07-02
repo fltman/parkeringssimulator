@@ -401,8 +401,8 @@
       ctx.stroke();
       for (const p of d.pts) { const s = PS.w2s(cam, p[0], p[1]); ctx.fillStyle = "#3b5bdb"; ctx.beginPath(); ctx.arc(s[0], s[1], 3, 0, Math.PI * 2); ctx.fill(); }
     } else if (d && d.type === "poly" && d.pts && d.pts.length) {
-      // polygon being clicked out (parking section = blue, building = green)
-      const col = d.kind === "bldg" ? "#2f9e44" : "#3b5bdb";
+      // polygon being clicked out (section = blue, building = green, trace = orange)
+      const col = d.kind === "bldg" ? "#2f9e44" : d.kind === "trace" ? "#e8590c" : "#3b5bdb";
       ctx.strokeStyle = col; ctx.lineWidth = 2;
       ctx.beginPath();
       for (let i = 0; i < d.pts.length; i++) { const s = PS.w2s(cam, d.pts[i][0], d.pts[i][1]); if (i) ctx.lineTo(s[0], s[1]); else ctx.moveTo(s[0], s[1]); }

@@ -247,6 +247,60 @@
     state.cam.tx = p0.x - pin[0] * state.cam.scale;
     state.cam.ty = p0.y - pin[1] * state.cam.scale;
   }
+  // World (metres) <-> lat/lng via the ground anchor (map mode only).
+  function worldToLatLng(x, y) {
+    const a = state._anchor, pin = state._pin || [0, 0];
+    const lat = a.lat + ((pin[1] - y) / EARTH_R) * R2D;
+    const lng = a.lng + ((x - pin[0]) / (EARTH_R * Math.cos(a.lat * D2R))) * R2D;
+    return [lat, lng];
+  }
+  function latLngToWorld(lat, lng) {
+    const a = state._anchor, pin = state._pin || [0, 0];
+    const x = pin[0] + (lng - a.lng) * D2R * EARTH_R * Math.cos(a.lat * D2R);
+    const y = pin[1] - (lat - a.lat) * D2R * EARTH_R;
+    return [x, y];
+  }
+  function setTraceStatus(msg) { const el = document.getElementById("trace-status"); if (el) el.textContent = msg; }
+
+  // Trace real buildings + roads from OpenStreetMap inside a drawn polygon.
+  const OSM_ROADS = new Set(["motorway", "trunk", "primary", "secondary", "tertiary", "unclassified", "residential", "service", "living_street", "road", "motorway_link", "trunk_link", "primary_link", "secondary_link", "tertiary_link"]);
+  async function traceFromMap(worldPoly) {
+    if (!state.mapMode || !state._anchor) { setTraceStatus("Slå på Karta-bakgrund först."); return; }
+    const polyStr = worldPoly.map((p) => { const c = worldToLatLng(p[0], p[1]); return c[0].toFixed(6) + " " + c[1].toFixed(6); }).join(" ");
+    const q = `[out:json][timeout:30];(way["building"](poly:"${polyStr}");way["highway"](poly:"${polyStr}"););out geom;`;
+    setTraceStatus("Hämtar från OpenStreetMap…");
+    try {
+      const resp = await fetch("https://overpass-api.de/api/interpreter", {
+        method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "data=" + encodeURIComponent(q),
+      });
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      const data = await resp.json();
+      let nb = 0, nr = 0;
+      for (const el of data.elements || []) {
+        if (el.type !== "way" || !el.geometry) continue;
+        const tags = el.tags || {};
+        const pts = el.geometry.map((n) => latLngToWorld(n.lat, n.lon));
+        if (tags.building) {
+          if (pts.length > 3 && Math.hypot(pts[0][0] - pts[pts.length - 1][0], pts[0][1] - pts[pts.length - 1][1]) < 0.5) pts.pop();
+          if (pts.length < 3) continue;
+          retailCount++;
+          state.buildings.push({ name: tags.name || ("Byggnad " + retailCount), poly: pts, floors: parseInt(tags["building:levels"], 10) || 1, fill: PS.BUILDING_FILLS[(retailCount - 1) % PS.BUILDING_FILLS.length] });
+          nb++;
+        } else if (tags.highway && OSM_ROADS.has(tags.highway) && pts.length >= 2) {
+          state.roads.push(pts); nr++;
+        }
+      }
+      state._draft = null; setTool("select");
+      regen(); rebuildNet(); requestDraw();
+      setTraceStatus(nb + nr ? `Importerade ${nb} byggnader och ${nr} vägar (© OpenStreetMap).` : "Inget hittat i ytan — prova en större yta.");
+    } catch (err) {
+      console.error("[trace]", err);
+      setTraceStatus("Kunde inte hämta: " + err.message);
+      state._draft = null; setTool("select"); requestDraw();
+    }
+  }
+
   function setBasemap(kind) {
     if (kind === "styled") {
       state.mapMode = false;
@@ -398,8 +452,9 @@
 
     // Building-draw works in BOTH automatic and manual mode (buildings aren't a
     // "manual layout" thing — they matter either way).
-    if (state.tool === "bldg") {
-      if (!state._draft || state._draft.type !== "poly" || state._draft.kind !== "bldg") state._draft = { type: "poly", kind: "bldg", pts: [], cursor: w };
+    if (state.tool === "bldg" || state.tool === "trace") {
+      const kind = state.tool;
+      if (!state._draft || state._draft.type !== "poly" || state._draft.kind !== kind) state._draft = { type: "poly", kind: kind, pts: [], cursor: w };
       const pts = state._draft.pts;
       if (pts.length >= 3 && Math.hypot(pts[0][0] - w[0], pts[0][1] - w[1]) < 3) { finishPoly(); return; }
       pts.push([w[0], w[1]]); requestDraw(); return;
@@ -495,7 +550,7 @@
     if (state.layoutMode === "manual" && state.tool === "road" && state._draft && state._draft.type === "road" && !drag) {
       state._draft.cursor = mouseWorld(e); requestDraw(); return;
     }
-    if ((state.tool === "bldg" || (state.layoutMode === "manual" && state.tool === "section")) && state._draft && state._draft.type === "poly" && !drag) {
+    if ((state.tool === "bldg" || state.tool === "trace" || (state.layoutMode === "manual" && state.tool === "section")) && state._draft && state._draft.type === "poly" && !drag) {
       state._draft.cursor = mouseWorld(e); requestDraw(); return;
     }
     if (!drag) return;
@@ -730,6 +785,12 @@
   // Finish a clicked-out polygon → a building or a parking section.
   function finishPoly() {
     const d = state._draft;
+    if (d && d.type === "poly" && d.kind === "trace") { // trace real OSM data in the drawn area
+      const poly = d.pts.map((p) => [p[0], p[1]]);
+      state._draft = null; requestDraw();
+      if (poly.length >= 3) traceFromMap(poly); else setTool("select");
+      return;
+    }
     const wasBldg = d && d.type === "poly" && d.kind === "bldg";
     if (d && d.type === "poly" && d.pts.length >= 3) {
       const poly = d.pts.map((p) => [p[0], p[1]]);
@@ -948,6 +1009,7 @@
     state.tool = v;
     segSetActive("tool-seg", v); // clears highlight when v isn't in the seg (e.g. "bldg")
     document.getElementById("btn-draw-bldg").classList.toggle("primary", v === "bldg");
+    document.getElementById("btn-trace").classList.toggle("primary", v === "trace");
     state._draft = null;
     if (v !== "select") { state.selection = null; syncSelectionUI(); }
     requestDraw();
@@ -955,6 +1017,11 @@
 
   segBind("tool-seg", (v) => setTool(v));
   document.getElementById("btn-draw-bldg").addEventListener("click", () => setTool(state.tool === "bldg" ? "select" : "bldg"));
+  document.getElementById("btn-trace").addEventListener("click", () => {
+    if (!state.mapMode) { setTraceStatus("Slå på Karta-bakgrund (under Vy) först."); return; }
+    setTool(state.tool === "trace" ? "select" : "trace");
+    setTraceStatus(state.tool === "trace" ? "Rita en yta på kartan — dubbelklick eller Enter avslutar." : "");
+  });
 
   function updateSelSection(key, val) {
     if (state.selection && state.selection.type === "section") {

@@ -310,6 +310,13 @@
       if (aId === bId) return;
       const A = nodes[aId], B = nodes[bId], len = Math.hypot(B.x - A.x, B.y - A.y);
       if (len < 0.5) return;
+      // A two-way road may not cut across a roundabout's central island — that
+      // would give cars a straight shortcut through the middle instead of
+      // circulating the one-way ring. The ring's own edges are one-way (exempt).
+      if (!oneway) {
+        const mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2;
+        for (const rb of rounds) if (Math.hypot(mx - rb.x, my - rb.y) < rb.r - 1) return;
+      }
       for (const e of adj[aId] || []) if (e.to === bId) return; // dedupe
       const id = edges.length;
       edges.push({ id, a: aId, b: bId, len, block: 0, cong: 0, load: 0, oneway: !!oneway });
@@ -336,6 +343,48 @@
     }
     for (let i = 0; i < nodes.length; i++) if (!adj[i]) adj[i] = [];
     if (!edges.length) return null;
+
+    // --- Auto-weld near-miss gaps ----------------------------------------
+    // Traced road ways, section driveway-spurs and roundabout rings routinely
+    // stop a couple of metres short of one another without sharing a node,
+    // which splits the drive graph into unreachable islands (cars then can't
+    // reach the parking from a gate). Weld components whose closest node-pair
+    // is within WELD_MAX metres with a short two-way link — never across a
+    // roundabout island, which would defeat circulation.
+    const welds = [];
+    const WELD_MAX = 4;
+    function insideRing(ax, ay, bx, by) {
+      const mx = (ax + bx) / 2, my = (ay + by) / 2;
+      for (const rb of rounds) if (Math.hypot(mx - rb.x, my - rb.y) < rb.r - 1) return true;
+      return false;
+    }
+    function undirComp() {
+      const cid = new Array(nodes.length).fill(-1);
+      const uadj = nodes.map(() => []);
+      for (const e of edges) { uadj[e.a].push(e.b); uadj[e.b].push(e.a); }
+      let c = 0;
+      for (let i = 0; i < nodes.length; i++) {
+        if (cid[i] >= 0) continue;
+        const st = [i]; cid[i] = c;
+        while (st.length) { const u = st.pop(); for (const v of uadj[u]) if (cid[v] < 0) { cid[v] = c; st.push(v); } }
+        c++;
+      }
+      return cid;
+    }
+    for (let guard = 0; guard < 300; guard++) {
+      const cid = undirComp();
+      let bi = -1, bj = -1, bd = WELD_MAX;
+      for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
+        if (cid[i] === cid[j]) continue;
+        const d = Math.hypot(nodes[i].x - nodes[j].x, nodes[i].y - nodes[j].y);
+        if (d < bd && !insideRing(nodes[i].x, nodes[i].y, nodes[j].x, nodes[j].y)) { bd = d; bi = i; bj = j; }
+      }
+      if (bi < 0) break;
+      const before = edges.length;
+      addEdge(bi, bj, false);
+      if (edges.length === before) break; // nothing added — avoid spinning
+      welds.push([[nodes[bi].x, nodes[bi].y], [nodes[bj].x, nodes[bj].y]]);
+    }
 
     const aisleNodes = edges.map((e) => [{ node: e.a, along: 0 }, { node: e.b, along: e.len }]);
 
@@ -395,7 +444,31 @@
       }
       return { dist };
     }
-    const net = { nodes, edges, adj, aisleNodes, entrances, exits, doors, stallAccess, horiz: true, dijkstra };
+    // Connectivity overlay: flag which edges are reachable-from-a-gate (green)
+    // vs isolated fragments (red), and collect junction points (where 3+ edges
+    // meet) — the renderer marks these so the user can see what is connected.
+    const junctions = [];
+    (function () {
+      const cid = undirComp();
+      const haveGates = entrances.length || exits.length;
+      const gateComp = new Set();
+      for (const nId of entrances.concat(exits)) if (nId >= 0) gateComp.add(cid[nId]);
+      for (const e of edges) e.connected = haveGates ? gateComp.has(cid[e.a]) : true;
+      const deg = new Array(nodes.length).fill(0);
+      for (const e of edges) { deg[e.a]++; deg[e.b]++; }
+      const secPolys = (state.sections || []).map((s) => s.poly || (PS.sectionCorners && PS.sectionCorners(s))).filter(Boolean);
+      for (let i = 0; i < nodes.length; i++) {
+        if (deg[i] < 3) continue; // only real meeting points, not polyline bends
+        const n = nodes[i];
+        // Skip nodes inside a parking section — those are aisle-ladder rungs, not
+        // road/roundabout connections, and would swamp the overlay with dots.
+        let inSec = false;
+        for (const poly of secPolys) if (g.polyContains(n.x, n.y, poly, 0)) { inSec = true; break; }
+        if (!inSec) junctions.push([n.x, n.y]);
+      }
+    })();
+
+    const net = { nodes, edges, adj, aisleNodes, entrances, exits, doors, stallAccess, horiz: true, dijkstra, welds, junctions };
     net.fromIn = entrances.map(dijkstra);
     net.fromOut = exits.map(dijkstraTo);
     net.recomputeRoutes = () => { net.fromIn = net.entrances.map(dijkstra); net.fromOut = net.exits.map(dijkstraTo); };
@@ -602,12 +675,17 @@
       }
       return out;
     }
+    // Footprint area of a building — polygon (shoelace) or rectangle.
+    function footprint(x) {
+      const fp = (x.poly && x.poly.length >= 3) ? g.area(x.poly) : (x.w || 0) * (x.h || 0);
+      return Math.max(1, fp); // never 0/NaN, so every building keeps some weight
+    }
     // Pick a destination building, weighted by floor area (bigger = busier).
     function chooseDestBuilding() {
       const b = state.buildings;
       if (!b.length) return -1;
       let tot = 0;
-      const w = b.map((x) => { const a = x.w * x.h * (x.floors || 1); tot += a; return a; });
+      const w = b.map((x) => { const a = footprint(x) * (x.floors || 1); tot += a; return a; });
       let r = sim.rng() * tot;
       for (let i = 0; i < b.length; i++) { r -= w[i]; if (r <= 0) return i; }
       return b.length - 1;
@@ -632,31 +710,31 @@
       const eN = sim.net.nodes[gnode];
       for (const car of sim.cars) {
         if (car.state !== "toStall" && car.state !== "toExit") continue;
-        if (Math.hypot(car.x - eN.x, car.y - eN.y) < CAR_LEN + MIN_GAP + 1) return true;
+        // Only a car actually stopped/queued at the gate blocks a fresh spawn —
+        // a car merely driving PAST (e.g. a gate on a through-road) shouldn't
+        // starve that gate, or arrivals can't spread evenly across entrances.
+        if (Math.hypot(car.x - eN.x, car.y - eN.y) < CAR_LEN + MIN_GAP + 1 && (car.v || 0) < 1.5) return true;
       }
       return false;
     }
-    // Returns true if the arriving car was consumed (spawned or turned away),
-    // false if it must keep waiting on the street (all driveways full) — models
-    // the demand backing up outside instead of teleport-stacking inside the lot.
-    function spawnCar() {
-      if (!sim.net || !sim.net.entrances.length) return true;
+    // Spawn one car AT a specific entrance k (each gate has its own arrival
+    // stream — see the arrival loop — so demand is spread evenly across gates).
+    // Returns true if consumed (spawned or turned away), false if the gate is
+    // momentarily blocked and the car must keep waiting on the street.
+    function spawnCarAt(k) {
+      const ent = sim.net.entrances;
+      const dij = sim.net.fromIn[k];
       const destB = chooseDestBuilding();
       const stallIdx = chooseStall(destB);
-      if (stallIdx < 0) { sim.turnedAway++; return true; }
-      // Prefer the cheapest entrance; skip any that are blocked right now.
-      const ent = sim.net.entrances;
-      const order = ent.map((_, i) => i)
-        .filter((k) => isFinite(costTo(stallIdx, sim.net.fromIn[k])))
-        .sort((a, b) => costTo(stallIdx, sim.net.fromIn[a]) - costTo(stallIdx, sim.net.fromIn[b]));
-      if (!order.length) { sim.turnedAway++; return true; } // unreachable
-      let chosen = -1;
-      for (const k of order) { if (!gateBlocked(ent[k])) { chosen = k; break; } }
-      if (chosen < 0) return false; // every viable entrance is full — wait
-      const path = pathToStall(stallIdx, sim.net.fromIn[chosen], ent[chosen]);
+      if (stallIdx < 0) { sim.turnedAway++; return true; }        // lot full
+      if (!isFinite(costTo(stallIdx, dij))) { sim.turnedAway++; return true; } // unreachable from this gate
+      if (gateBlocked(ent[k])) return false;                      // this gate's mouth is occupied — wait
+      const path = pathToStall(stallIdx, dij, ent[k]);
       if (!path || !path.length) { sim.turnedAway++; return true; }
+      if (!sim.entCount || sim.entCount.length !== ent.length) sim.entCount = new Array(ent.length).fill(0);
+      sim.entCount[k]++;
       state.parking.stalls[stallIdx].reserved = true;
-      const car = { kind: "car", state: "toStall", stallIdx, path, segIndex: 0, segT: 0, v: 0, color: carColor(), spawnT: sim.t, traits: makeTraits(), stuck: 0, gateIn: chosen, destB };
+      const car = { kind: "car", state: "toStall", stallIdx, path, segIndex: 0, segT: 0, v: 0, color: carColor(), spawnT: sim.t, traits: makeTraits(), stuck: 0, gateIn: k, destB };
       setPose(car);
       sim.cars.push(car);
       return true;
@@ -704,10 +782,19 @@
       }
       sim._crashPts = sim.cars.filter((c) => c.crashed).map((c) => [c.x, c.y]);
 
-      // Arrivals (accumulate expected count; cap the backlog so a cleared
-      // entrance doesn't release a burst).
-      sim._arrAcc = Math.min(6, sim._arrAcc + (sim.arrivalRate / 60) * dt);
-      while (sim._arrAcc >= 1) { if (spawnCar()) sim._arrAcc -= 1; else break; }
+      // Arrivals — one independent stream PER entrance, each getting an equal
+      // share (arrivalRate / #gates), so demand is distributed evenly across
+      // the gates. A congested gate just backs up its own (capped) queue
+      // instead of shoving its share onto the others.
+      const nEnt = (sim.net && sim.net.entrances.length) || 0;
+      if (nEnt) {
+        if (!sim._gateAcc || sim._gateAcc.length !== nEnt) sim._gateAcc = new Array(nEnt).fill(0);
+        const per = (sim.arrivalRate / 60) * dt / nEnt;
+        for (let k = 0; k < nEnt; k++) {
+          sim._gateAcc[k] = Math.min(4, sim._gateAcc[k] + per);
+          while (sim._gateAcc[k] >= 1) { if (spawnCarAt(k)) sim._gateAcc[k] -= 1; else break; }
+        }
+      }
 
       // Departures.
       for (const car of sim.cars) if (car.state === "parked" && sim.t >= car.departAt) startLeaving(car);
@@ -830,16 +917,32 @@
         }
 
         // Junction: yield to the node winner, to a car already crossing the
-        // junction, to a full next lane, and to a blocked edge.
+        // junction, to a full next lane, and to a blocked edge. Roundabouts
+        // override the "closest wins" rule: circulating traffic has priority,
+        // so a car ENTERING the ring gives way to cars already on it, and a car
+        // already ON the ring does not yield to entering traffic at the node.
         if (!car.overtaking && li.endNode != null && car.segIndex < car.path.length - 1) {
           let blocked = false;
-          const w = nodeWinner.get(li.endNode);
-          if (w && w.car !== car) blocked = true;
-          const occ = nodeBusy.get(li.endNode);
-          if (occ) for (const o of occ) { if (o !== car) { blocked = true; break; } }
           const nseg = car.path[car.segIndex + 1];
+          const curOnRing = li.edgeId >= 0 && sim.net.edges[li.edgeId] && sim.net.edges[li.edgeId].oneway;
+          const nextOnRing = nseg.edgeId >= 0 && sim.net.edges[nseg.edgeId] && sim.net.edges[nseg.edgeId].oneway;
+          if (!curOnRing) {
+            const w = nodeWinner.get(li.endNode);
+            if (w && w.car !== car) blocked = true;
+            const occ = nodeBusy.get(li.endNode);
+            if (occ) for (const o of occ) { if (o !== car) { blocked = true; break; } }
+            // Give way to circulating traffic when entering a roundabout: yield
+            // to any car already on the ring approaching this same entry node.
+            if (nextOnRing) {
+              for (const o of movers) {
+                if (o === car) continue;
+                const oe = sim.net.edges[o._li.edgeId];
+                if (oe && oe.oneway && o._li.endNode === li.endNode && o._li.remaining < NODE_APPROACH + 3) { blocked = true; break; }
+              }
+            }
+          }
+          // Both cases: don't pile into an occupied next lane or a blocked edge.
           if (nseg.laneKey != null) {
-            // Don't block the box: only enter if the far side has room to clear it.
             const narr = lanes.get(nseg.laneKey) || [];
             for (const o of narr) { if (o !== car && o._li.q < CAR_LEN + gapMin + BOX_CLEAR) { blocked = true; break; } }
           }
@@ -1011,6 +1114,7 @@
     sim.step = step;
     sim.rebuild = function () {
       sim.net = PS.buildNetwork(state);
+      sim.entCount = null; sim._gateAcc = null; // reset per-entrance arrival streams for the new network
       sim.cars = [];
       sim.peds = [];
       sim.conflict.clear();
@@ -1038,7 +1142,7 @@
     sim.reseed = function (seed) {
       sim.seed = seed; sim.rng = mulberry32(seed);
       sim.t = 0; sim.parkedTotal = 0; sim.turnedAway = 0; sim.collisions = 0; sim.gaveUp = 0; sim._arrAcc = 0; sim.recentSearch = [];
-      sim.peds = []; sim.conflict.clear(); sim._crashPts = [];
+      sim.peds = []; sim.conflict.clear(); sim._crashPts = []; sim.entCount = null; sim._gateAcc = null;
     };
     // Force a car to stall/crash: it stops and blocks its lane for a while.
     sim.crash = function (car) {

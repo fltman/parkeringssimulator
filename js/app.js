@@ -94,6 +94,7 @@
     showHeat: true,
     showPeds: true,
     showConflicts: false,
+    showConn: true,
     follow: false,
     mapMode: false,
     map: null,
@@ -318,11 +319,13 @@
   }
 
   let pendingMapRestore = null; // saved map view (center/zoom/anchor/pin) to apply once Leaflet loads
+  let loadingProject = false;   // true while a project loads — suppresses autosave so a half-loaded state can't overwrite a good save
   function setBasemap(kind) {
     if (kind === "styled") {
       state.mapMode = false;
       document.getElementById("map").style.display = "none";
       document.getElementById("map-search").hidden = true;
+      loadingProject = false;
       resize(true);
       return;
     }
@@ -346,10 +349,12 @@
       state.map.invalidateSize();
       syncCamFromMap();
       requestDraw();
+      loadingProject = false; // map view restored — autosave may resume
       // The map div just became visible — re-measure once layout settles so tiles show.
       setTimeout(() => { if (state.mapMode && state.map) { state.map.invalidateSize(); syncCamFromMap(); requestDraw(); } }, 80);
     }).catch((err) => {
       document.getElementById("map").style.display = "none";
+      loadingProject = false;
       alert("Kunde inte ladda kartan: " + err.message + "\nStiliserad vy används.");
       segSetActive("base-seg", "styled");
     });
@@ -527,6 +532,14 @@
       if (rhd) { drag = { type: rhd === "center" ? "roundcenter" : "roundradius", index: state.selection.index }; return; }
     }
 
+    // Select a moving car if one is under the cursor — takes priority over the
+    // section/road/roundabout it happens to be driving on, otherwise a car can
+    // never be clicked (it's almost always sitting on top of a road/section).
+    if (state.traffic && state.traffic.net) {
+      const car = state.traffic.pickCar(w[0], w[1], 4);
+      if (car) { selectCar(car); return; }
+    }
+
     // Select/move sections, roads or roundabouts (manual, select tool).
     if (state.layoutMode === "manual" && state.tool === "select") {
       const si = sectionAt(w);
@@ -539,12 +552,6 @@
       if (ri >= 0) { state.selection = { type: "road", index: ri }; syncSelectionUI(); requestDraw(); return; }
       const ci = roundAt(w);
       if (ci >= 0) { state.selection = { type: "round", index: ci }; syncSelectionUI(); requestDraw(); return; }
-    }
-
-    // Select a moving car if one is under the cursor (takes priority).
-    if (state.traffic && state.traffic.net) {
-      const car = state.traffic.pickCar(w[0], w[1], 4);
-      if (car) { selectCar(car); return; }
     }
 
     // Select / drag an entrance or exit gate.
@@ -1267,12 +1274,13 @@
     if (saved) { clearTimeout(setStatus._t); setStatus._t = setTimeout(() => el.classList.remove("show"), 1600); }
   }
   function saveProject() {
+    if (loadingProject) return; // a project is mid-load — don't persist its transient state over the good save
     const r = loadReg(); if (!r.current) return;
     try { localStorage.setItem(projKey(r.current), JSON.stringify(serializeProject())); } catch (e) { setStatus("Kunde inte spara", false); return; }
     const it = r.items.find((x) => x.id === r.current); if (it) { it.updated = Date.now(); saveReg(r); }
     setStatus("✓ Sparat", true);
   }
-  function scheduleSave() { setStatus("Sparar…", false); clearTimeout(saveTimer); saveTimer = setTimeout(saveProject, 700); }
+  function scheduleSave() { if (loadingProject) return; setStatus("Sparar…", false); clearTimeout(saveTimer); saveTimer = setTimeout(saveProject, 700); }
 
   function refreshProjectSelect() {
     const r = loadReg(), sel = document.getElementById("project-select");
@@ -1357,6 +1365,7 @@
   function setSlider(id, valId, v) { const el = document.getElementById(id); if (el != null && v != null) { el.value = v; document.getElementById(valId).textContent = v; } }
   function applyPlan(p) {
     if (!p || p.app !== "parkeringssimulator") throw new Error("okänt filformat");
+    loadingProject = true; // hold off autosave until the (possibly async) map restore has finished
     pauseTraffic();
     if (p.site) state.site = p.site;
     if (p.siteName) state.siteName = p.siteName;
@@ -1399,8 +1408,10 @@
     updateTrafficStats();
     requestDraw();
     // Restore the map view if the project was saved in map mode.
-    if (p.map && p.map.anchor) { pendingMapRestore = p.map; segSetActive("base-seg", "map"); setBasemap("map"); }
-    else { segSetActive("base-seg", "styled"); }
+    if (p.map && p.map.anchor) {
+      pendingMapRestore = p.map; segSetActive("base-seg", "map"); setBasemap("map");
+      setTimeout(() => { loadingProject = false; }, 8000); // failsafe: re-enable autosave even if the map never loads
+    } else { segSetActive("base-seg", "styled"); loadingProject = false; }
   }
 
   // Selected-car trait editing.
@@ -1445,6 +1456,10 @@
   });
   document.getElementById("chk-conflicts").addEventListener("change", (e) => {
     state.showConflicts = e.target.checked;
+    requestDraw();
+  });
+  document.getElementById("chk-conn").addEventListener("change", (e) => {
+    state.showConn = e.target.checked;
     requestDraw();
   });
   document.getElementById("chk-dims").addEventListener("change", (e) => {

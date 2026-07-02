@@ -438,6 +438,49 @@
   }
 
   // ---- top-level draw -----------------------------------------------------
+  // Connection overlay (manual mode): shows the user what is wired together.
+  //  · red dashed  = drive-network fragment NOT reachable from any gate → draw a road to link it
+  //  · green dots  = junctions where roads / roundabouts / spurs actually meet
+  //  · orange rings= gaps the app auto-welded (a hint you may want a real road there)
+  function drawConnections(ctx, cam, state) {
+    const net = state.traffic && state.traffic.net;
+    if (!net) return;
+    ctx.save();
+    // isolated fragments
+    ctx.lineWidth = Math.max(2, 3 * cam.scale);
+    ctx.strokeStyle = "rgba(224,49,49,0.9)";
+    const dash = Math.max(3, 4 * cam.scale);
+    ctx.setLineDash([dash, dash]);
+    for (const e of net.edges) {
+      if (e.connected) continue;
+      const A = net.nodes[e.a], B = net.nodes[e.b];
+      const a = PS.w2s(cam, A.x, A.y), b = PS.w2s(cam, B.x, B.y);
+      ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    // auto-weld markers (link + ring)
+    if (net.welds && net.welds.length) {
+      ctx.strokeStyle = "rgba(240,140,0,0.95)"; ctx.lineWidth = Math.max(1.5, 1.4 * cam.scale);
+      const wr = Math.max(3, 2.4 * cam.scale);
+      for (const w of net.welds) {
+        const a = PS.w2s(cam, w[0][0], w[0][1]), b = PS.w2s(cam, w[1][0], w[1][1]);
+        ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+        const s = PS.w2s(cam, (w[0][0] + w[1][0]) / 2, (w[0][1] + w[1][1]) / 2);
+        ctx.beginPath(); ctx.arc(s[0], s[1], wr, 0, Math.PI * 2); ctx.stroke();
+      }
+    }
+    // junction dots
+    if (net.junctions && net.junctions.length) {
+      ctx.fillStyle = "rgba(47,158,68,0.95)"; ctx.strokeStyle = "#fff"; ctx.lineWidth = 1;
+      const r = Math.max(2, 1.5 * cam.scale);
+      for (const p of net.junctions) {
+        const s = PS.w2s(cam, p[0], p[1]);
+        ctx.beginPath(); ctx.arc(s[0], s[1], r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
   PS.draw = function (state) {
     const { ctx, canvas, cam } = state;
     const W = canvas.width / (state.dpr || 1);
@@ -476,6 +519,7 @@
     }
     drawBuildings(ctx, cam, state.buildings, state.selection);
     if (manual) drawManualOverlay(ctx, cam, state);
+    if (manual && state.showConn) drawConnections(ctx, cam, state);
     if (state.traffic && PS.drawGates) PS.drawGates(ctx, cam, state);
     if (PS.drawHandles) PS.drawHandles(ctx, cam, state);
     if (state._analysisWorst) drawAnalysisMarker(ctx, cam, state._analysisWorst);

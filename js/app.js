@@ -614,9 +614,11 @@
     if (e.key === "Enter" && state._draft && state._draft.type === "poly") { finishPoly(); e.preventDefault(); }
     if (e.key === "Escape" && state._draft) { state._draft = null; requestDraw(); }
   });
-  canvas.addEventListener("dblclick", () => {
-    if (state._draft && state._draft.type === "road") finishRoad();
-    else if (state._draft && state._draft.type === "poly") finishPoly();
+  canvas.addEventListener("dblclick", (e) => {
+    if (state._draft && state._draft.type === "road") { finishRoad(); return; }
+    if (state._draft && state._draft.type === "poly") { finishPoly(); return; }
+    // No draft in progress → double-click a polygon edge to add an anchor point.
+    if (!state.editSite) insertPolyVertex(mouseWorld(e), mouseScreen(e));
   });
 
   // ---- building actions ---------------------------------------------------
@@ -707,6 +709,37 @@
     }
     state._draft = null;
     requestDraw();
+  }
+  // Projection of point p onto segment a-b (world coords).
+  function projOnSeg(p, a, b) {
+    const vx = b[0] - a[0], vy = b[1] - a[1], L2 = vx * vx + vy * vy || 1;
+    let t = ((p[0] - a[0]) * vx + (p[1] - a[1]) * vy) / L2; t = Math.max(0, Math.min(1, t));
+    return [a[0] + t * vx, a[1] + t * vy];
+  }
+  // Double-click a polygon edge to insert a new anchor point there.
+  function insertPolyVertex(w, scr) {
+    const cands = [];
+    const sel = state.selection;
+    if (sel && sel.type === "building" && state.buildings[sel.index] && state.buildings[sel.index].poly) cands.push(["building", sel.index]);
+    if (sel && sel.type === "section" && state.sections[sel.index] && state.sections[sel.index].poly) cands.push(["section", sel.index]);
+    for (let i = state.buildings.length - 1; i >= 0; i--) if (state.buildings[i].poly) cands.push(["building", i]);
+    for (let i = state.sections.length - 1; i >= 0; i--) if (state.sections[i].poly) cands.push(["section", i]);
+    let best = null;
+    for (const [type, idx] of cands) {
+      const poly = (type === "building" ? state.buildings[idx] : state.sections[idx]).poly;
+      for (let k = 0; k < poly.length; k++) {
+        const a = PS.w2s(state.cam, poly[k][0], poly[k][1]);
+        const b = PS.w2s(state.cam, poly[(k + 1) % poly.length][0], poly[(k + 1) % poly.length][1]);
+        const d = g.distPointToSegment(scr, a, b);
+        if (d < 14 && (!best || d < best.d)) best = { d, type, idx, k, poly };
+      }
+    }
+    if (!best) return false;
+    const a = best.poly[best.k], b = best.poly[(best.k + 1) % best.poly.length];
+    best.poly.splice(best.k + 1, 0, projOnSeg(w, a, b));
+    state.selection = { type: best.type, index: best.idx };
+    syncSelectionUI(); regen(); requestDraw();
+    return true;
   }
   // Finish a clicked-out polygon → a building or a parking section.
   function finishPoly() {

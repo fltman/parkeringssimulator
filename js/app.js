@@ -759,8 +759,16 @@
     state._draft = null; requestDraw();
   }
 
+  // ---- panel tabs (Konstruera / Simulera / Analys) ----
+  function showTab(name) {
+    document.querySelectorAll("#panel-tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === name));
+    document.querySelectorAll(".tab-page").forEach((p) => { p.hidden = p.dataset.page !== name; });
+  }
+  document.getElementById("panel-tabs").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) showTab(b.dataset.tab); });
+
   function syncSelectionUI() {
     const sel = state.selection;
+    if (sel) showTab("build"); // any plan element lives in Konstruera
     const selB = sel && sel.type === "building";
     const selG = sel && sel.type === "gate";
     const selS = sel && sel.type === "section";
@@ -845,6 +853,7 @@
   // ---- selected-car (driver) panel ----------------------------------------
   function selectCar(car) {
     sim.selectedCar = car;
+    showTab("sim"); // the "Vald bil" panel lives in Simulera
     document.getElementById("sel-car").hidden = false;
     setSel("sel-aggr", car.traits.aggr);
     setSel("sel-caut", car.traits.caution);

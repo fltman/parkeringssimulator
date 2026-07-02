@@ -32,244 +32,259 @@
         </div>
 
         <aside id="panel">
-          <section>
-            <h2>Byggnader</h2>
-            <div class="row">
-              <button id="btn-add" class="primary">+ Lägg till byggnad</button>
-            </div>
-            <div class="row">
-              <button id="btn-del" class="ghost" disabled>Ta bort markerad</button>
-            </div>
-            <p class="hint" id="sel-hint">Klicka en byggnad för att flytta / ändra storlek. Dra hörnen för att skala.</p>
-            <div class="field" id="floors-field" hidden>
-              <label>Våningar: <span id="floors-val">1</span></label>
-              <input type="range" id="floors" min="1" max="6" step="1" value="1" />
-            </div>
-          </section>
+          <div class="ptabs" id="panel-tabs">
+            <button data-tab="build" class="on">Konstruera</button>
+            <button data-tab="sim">Simulera</button>
+            <button data-tab="analysis">Analys</button>
+          </div>
 
-          <section>
-            <h2>In- och utfarter</h2>
-            <div class="row">
-              <button id="btn-add-in" class="ghost">+ Infart</button>
-              <button id="btn-add-out" class="ghost">+ Utfart</button>
-            </div>
-            <p class="hint">Grön = infart, orange = utfart. Klicka för att markera, dra för att flytta, Delete tar bort.</p>
-          </section>
-
-          <section>
-            <h2>Layout</h2>
-            <div class="field">
-              <div class="seg" id="layout-seg">
-                <button data-v="auto" class="on">Auto</button>
-                <button data-v="manual">Manuell</button>
-              </div>
-            </div>
-            <div id="manual-tools" hidden>
-              <div class="field">
-                <label>Verktyg</label>
-                <div class="seg" id="tool-seg">
-                  <button data-v="select" class="on">Markör</button>
-                  <button data-v="road">Väg</button>
-                  <button data-v="section">Sektion</button>
-                  <button data-v="bldg">Byggnad</button>
-                  <button data-v="round">Rondell</button>
-                </div>
-              </div>
-              <p class="hint">Väg / Sektion / Byggnad: klicka ut ankarpunkter, dubbelklick eller Enter avslutar (klicka första punkten för att stänga). Rondell: dra. Markera en yta för att dra dess ankarpunkter; dubbelklick på en kant lägger till en ny punkt. Korsningar skapas där vägar möts.</p>
-              <div class="row"><button id="btn-clear-layout" class="ghost">Rensa layout</button></div>
-            </div>
-          </section>
-
-          <section id="sel-section" hidden>
-            <h2>Vald sektion</h2>
-            <div class="field" id="sec-rot-field">
-              <label>Rotera parkering: <span id="sec-rot-val">0</span>°</label>
-              <input type="range" id="sec-rot" min="0" max="180" step="1" value="0" />
-            </div>
-            <div class="field">
-              <label>Vinkel</label>
-              <div class="seg" id="sec-angle-seg">
-                <button data-v="90" class="on">90°</button>
-                <button data-v="60">60°</button>
-                <button data-v="45">45°</button>
-              </div>
-            </div>
-            <div class="field">
-              <label>Riktning</label>
-              <div class="seg" id="sec-orient-seg">
-                <button data-v="h" class="on">Längs</button>
-                <button data-v="v">Tvärs</button>
-              </div>
-            </div>
-          </section>
-
-          <section>
-            <h2>Parkeringslayout</h2>
-            <div class="field">
-              <label>Vinkel</label>
-              <div class="seg" id="angle-seg">
-                <button data-v="90" class="on">90°</button>
-                <button data-v="60">60°</button>
-                <button data-v="45">45°</button>
-              </div>
-            </div>
-            <div class="field">
-              <label>Riktning</label>
-              <div class="seg" id="orient-seg">
-                <button data-v="h" class="on">Öst–väst</button>
-                <button data-v="v">Nord–syd</button>
-              </div>
-            </div>
-            <div class="field">
-              <label>Kantzon (setback): <span id="setback-val">5</span> m</label>
-              <input type="range" id="setback" min="1" max="15" step="1" value="5" />
-            </div>
-            <div class="field">
-              <label>Grönska var: <span id="island-val">11</span>:e plats</label>
-              <input type="range" id="island" min="4" max="30" step="1" value="11" />
-            </div>
-          </section>
-
-          <section>
-            <h2>Trafiksimulering</h2>
-            <div class="field">
-              <label>Startbeläggning: <span id="occ-val">40</span>%</label>
-              <input type="range" id="occ" min="0" max="100" step="1" value="40" />
-            </div>
-            <div class="field">
-              <label>Ankomst: <span id="arr-val">40</span> bilar/min</label>
-              <input type="range" id="arr" min="0" max="150" step="5" value="40" />
-            </div>
-            <div class="field">
-              <label>Uppehåll: <span id="dwell-val">20</span> min</label>
-              <input type="range" id="dwell" min="1" max="90" step="1" value="20" />
-            </div>
-            <div class="field">
-              <label>Hastighet: <span id="speed-val">15</span> km/h</label>
-              <input type="range" id="speed" min="5" max="30" step="1" value="15" />
-            </div>
-            <div class="field">
-              <label>Tempo: <span id="tempo-val">20</span>×</label>
-              <input type="range" id="tempo" min="1" max="60" step="1" value="20" />
-            </div>
-            <div class="row">
-              <button id="btn-traffic" class="primary">▶ Starta trafik</button>
-              <button id="btn-treset" class="ghost">Nollställ</button>
-            </div>
-            <div class="tstats">
-              <div><span class="tv" id="t-circ">0</span><span class="tl">rullande</span></div>
-              <div><span class="tv" id="t-park">0</span><span class="tl">parkerade</span></div>
-              <div><span class="tv" id="t-queue">0</span><span class="tl">i kö</span></div>
-              <div><span class="tv" id="t-search">0 s</span><span class="tl">snitt söktid</span></div>
-              <div><span class="tv" id="t-coll">0</span><span class="tl">krockar</span></div>
-              <div><span class="tv" id="t-away">0</span><span class="tl">avvisade</span></div>
-            </div>
-            <p class="hint">Röda stråk = köer/flaskhalsar. IN = infart, UT = utfart. Klicka en bil för att ändra dess förare.</p>
-          </section>
-
-          <section>
-            <h2>Analys &amp; betyg</h2>
-            <div class="row">
-              <button id="btn-analyze" class="primary">Analysera layouten</button>
-            </div>
-            <p class="hint">Kör en kort trafikbenchmark med nuvarande inställningar och sätter betyg A–F med förslag. Påverkar inte den pågående simuleringen.</p>
-            <div id="report" hidden></div>
-            <div id="ai-block">
-              <div class="field" id="ai-key-field">
-                <label>OpenRouter-nyckel <span class="ai-note">(sparas bara lokalt i din webbläsare)</span></label>
-                <input type="password" id="ai-key" placeholder="sk-or-v1-…" autocomplete="off" />
+          <!-- ===================== KONSTRUERA ===================== -->
+          <div class="tab-page" data-page="build">
+            <section>
+              <h2>Byggnader</h2>
+              <div class="row">
+                <button id="btn-add" class="primary">+ Lägg till byggnad</button>
               </div>
               <div class="row">
-                <button id="btn-ai" class="ghost" disabled>✨ Fråga Claude om planen</button>
+                <button id="btn-del" class="ghost" disabled>Ta bort markerad</button>
               </div>
-              <p class="hint">Skickar simuleringens mätvärden till <code>anthropic/claude-sonnet-5</code> via OpenRouter för en resonerande analys ovanpå den regelbaserade. Kräver nät.</p>
-              <div id="ai-out" hidden></div>
-            </div>
-          </section>
-
-          <section>
-            <h2>Exportera / spara</h2>
-            <div class="row">
-              <button id="btn-export-png" class="ghost">Exportera PNG</button>
-              <button id="btn-export-json" class="ghost">Exportera JSON</button>
-            </div>
-            <div class="row">
-              <button id="btn-import-json" class="ghost">Importera JSON</button>
-            </div>
-            <input type="file" id="import-file" accept="application/json,.json" hidden />
-            <p class="hint">PNG = ögonblicksbild av planen. JSON = hela layouten (går att importera igen).</p>
-          </section>
-
-          <section>
-            <h2>Förarbeteende</h2>
-            <div class="field">
-              <label>Aggressivitet (snitt): <span id="aggr-val">50</span>%</label>
-              <input type="range" id="aggr" min="0" max="100" step="1" value="50" />
-            </div>
-            <div class="field">
-              <label>Osäkerhet (snitt): <span id="caut-val">40</span>%</label>
-              <input type="range" id="caut" min="0" max="100" step="1" value="40" />
-            </div>
-            <div class="field">
-              <label>Spridning: <span id="spread-val">35</span>%</label>
-              <input type="range" id="spread" min="0" max="60" step="1" value="35" />
-            </div>
-            <label class="check"><input type="checkbox" id="chk-overtake" checked /> Tillåt omkörning i mötande fält</label>
-          </section>
-
-          <section id="sel-car" hidden>
-            <h2>Vald bil</h2>
-            <p class="hint" id="sel-state">–</p>
-            <div class="field">
-              <label>Aggressivitet: <span id="sel-aggr-val">50</span>%</label>
-              <input type="range" id="sel-aggr" min="0" max="100" step="1" value="50" />
-            </div>
-            <div class="field">
-              <label>Osäkerhet: <span id="sel-caut-val">40</span>%</label>
-              <input type="range" id="sel-caut" min="0" max="100" step="1" value="40" />
-            </div>
-            <div class="field">
-              <label>Stress: <span id="sel-stress-val">0</span>%</label>
-              <input type="range" id="sel-stress" min="0" max="100" step="1" value="0" />
-            </div>
-            <div class="row">
-              <button id="btn-follow" class="ghost">🎥 Följ</button>
-            </div>
-            <div class="row">
-              <button id="btn-crash" class="ghost">💥 Krocka</button>
-              <button id="btn-deselect" class="ghost">Avmarkera</button>
-            </div>
-          </section>
-
-          <section>
-            <h2>Vy</h2>
-            <div class="field">
-              <label>Bakgrund</label>
-              <div class="seg" id="base-seg">
-                <button data-v="styled" class="on">Stiliserad</button>
-                <button data-v="map">Karta</button>
+              <p class="hint" id="sel-hint">Klicka en byggnad för att flytta / ändra storlek. Dra hörnen för att skala.</p>
+              <div class="field" id="floors-field" hidden>
+                <label>Våningar: <span id="floors-val">1</span></label>
+                <input type="range" id="floors" min="1" max="6" step="1" value="1" />
               </div>
-            </div>
-            <label class="check"><input type="checkbox" id="chk-heat" checked /> Visa trafikvärme</label>
-            <label class="check"><input type="checkbox" id="chk-peds" checked /> Visa fotgängare</label>
-            <label class="check"><input type="checkbox" id="chk-conflicts" /> Visa fotgängarkonflikter</label>
-            <label class="check"><input type="checkbox" id="chk-dims" /> Visa mått</label>
-            <label class="check"><input type="checkbox" id="chk-edit" /> Redigera tomtgräns</label>
-            <div class="row">
-              <button id="btn-fit" class="ghost">Centrera vyn</button>
-              <button id="btn-reset" class="ghost">Återställ allt</button>
-            </div>
-            <p class="hint">Skrolla för att zooma · dra tom yta för att panorera.</p>
-          </section>
+            </section>
+
+            <section>
+              <h2>In- och utfarter</h2>
+              <div class="row">
+                <button id="btn-add-in" class="ghost">+ Infart</button>
+                <button id="btn-add-out" class="ghost">+ Utfart</button>
+              </div>
+              <p class="hint">Grön = infart, orange = utfart. Klicka för att markera, dra för att flytta, Delete tar bort.</p>
+            </section>
+
+            <section>
+              <h2>Layout</h2>
+              <div class="field">
+                <div class="seg" id="layout-seg">
+                  <button data-v="auto" class="on">Auto</button>
+                  <button data-v="manual">Manuell</button>
+                </div>
+              </div>
+              <div id="manual-tools" hidden>
+                <div class="field">
+                  <label>Verktyg</label>
+                  <div class="toolgrid" id="tool-seg">
+                    <button data-v="select" class="on">Markör</button>
+                    <button data-v="road">Väg</button>
+                    <button data-v="section">Sektion</button>
+                    <button data-v="bldg">Byggnad</button>
+                    <button data-v="round">Rondell</button>
+                  </div>
+                </div>
+                <p class="hint">Väg / Sektion / Byggnad: klicka ut ankarpunkter, dubbelklick eller Enter avslutar (klicka första punkten för att stänga). Rondell: dra. Markera en yta för att dra dess ankarpunkter; dubbelklick på en kant lägger till en ny punkt. Korsningar skapas där vägar möts.</p>
+                <div class="row"><button id="btn-clear-layout" class="ghost">Rensa layout</button></div>
+              </div>
+            </section>
+
+            <section id="sel-section" hidden>
+              <h2>Vald sektion</h2>
+              <div class="field" id="sec-rot-field">
+                <label>Rotera parkering: <span id="sec-rot-val">0</span>°</label>
+                <input type="range" id="sec-rot" min="0" max="180" step="1" value="0" />
+              </div>
+              <div class="field">
+                <label>Vinkel</label>
+                <div class="seg" id="sec-angle-seg">
+                  <button data-v="90" class="on">90°</button>
+                  <button data-v="60">60°</button>
+                  <button data-v="45">45°</button>
+                </div>
+              </div>
+              <div class="field">
+                <label>Riktning</label>
+                <div class="seg" id="sec-orient-seg">
+                  <button data-v="h" class="on">Längs</button>
+                  <button data-v="v">Tvärs</button>
+                </div>
+              </div>
+            </section>
+
+            <section>
+              <h2>Parkeringslayout</h2>
+              <div class="field">
+                <label>Vinkel</label>
+                <div class="seg" id="angle-seg">
+                  <button data-v="90" class="on">90°</button>
+                  <button data-v="60">60°</button>
+                  <button data-v="45">45°</button>
+                </div>
+              </div>
+              <div class="field">
+                <label>Riktning</label>
+                <div class="seg" id="orient-seg">
+                  <button data-v="h" class="on">Öst–väst</button>
+                  <button data-v="v">Nord–syd</button>
+                </div>
+              </div>
+              <div class="field">
+                <label>Kantzon (setback): <span id="setback-val">5</span> m</label>
+                <input type="range" id="setback" min="1" max="15" step="1" value="5" />
+              </div>
+              <div class="field">
+                <label>Grönska var: <span id="island-val">11</span>:e plats</label>
+                <input type="range" id="island" min="4" max="30" step="1" value="11" />
+              </div>
+            </section>
+
+            <section>
+              <h2>Vy</h2>
+              <div class="field">
+                <label>Bakgrund</label>
+                <div class="seg" id="base-seg">
+                  <button data-v="styled" class="on">Stiliserad</button>
+                  <button data-v="map">Karta</button>
+                </div>
+              </div>
+              <label class="check"><input type="checkbox" id="chk-dims" /> Visa mått</label>
+              <label class="check"><input type="checkbox" id="chk-edit" /> Redigera tomtgräns</label>
+              <div class="row">
+                <button id="btn-fit" class="ghost">Centrera vyn</button>
+                <button id="btn-reset" class="ghost">Återställ allt</button>
+              </div>
+              <p class="hint">Skrolla för att zooma · dra tom yta för att panorera.</p>
+            </section>
+          </div>
+
+          <!-- ===================== SIMULERA ===================== -->
+          <div class="tab-page" data-page="sim" hidden>
+            <section>
+              <h2>Trafiksimulering</h2>
+              <div class="field">
+                <label>Startbeläggning: <span id="occ-val">40</span>%</label>
+                <input type="range" id="occ" min="0" max="100" step="1" value="40" />
+              </div>
+              <div class="field">
+                <label>Ankomst: <span id="arr-val">40</span> bilar/min</label>
+                <input type="range" id="arr" min="0" max="150" step="5" value="40" />
+              </div>
+              <div class="field">
+                <label>Uppehåll: <span id="dwell-val">20</span> min</label>
+                <input type="range" id="dwell" min="1" max="90" step="1" value="20" />
+              </div>
+              <div class="field">
+                <label>Hastighet: <span id="speed-val">15</span> km/h</label>
+                <input type="range" id="speed" min="5" max="30" step="1" value="15" />
+              </div>
+              <div class="field">
+                <label>Tempo: <span id="tempo-val">20</span>×</label>
+                <input type="range" id="tempo" min="1" max="60" step="1" value="20" />
+              </div>
+              <div class="row">
+                <button id="btn-traffic" class="primary">▶ Starta trafik</button>
+                <button id="btn-treset" class="ghost">Nollställ</button>
+              </div>
+              <div class="tstats">
+                <div><span class="tv" id="t-circ">0</span><span class="tl">rullande</span></div>
+                <div><span class="tv" id="t-park">0</span><span class="tl">parkerade</span></div>
+                <div><span class="tv" id="t-queue">0</span><span class="tl">i kö</span></div>
+                <div><span class="tv" id="t-search">0 s</span><span class="tl">snitt söktid</span></div>
+                <div><span class="tv" id="t-coll">0</span><span class="tl">krockar</span></div>
+                <div><span class="tv" id="t-away">0</span><span class="tl">avvisade</span></div>
+              </div>
+              <p class="hint">Röda stråk = köer/flaskhalsar. IN = infart, UT = utfart. Klicka en bil för att ändra dess förare.</p>
+              <label class="check"><input type="checkbox" id="chk-heat" checked /> Visa trafikvärme</label>
+              <label class="check"><input type="checkbox" id="chk-peds" checked /> Visa fotgängare</label>
+              <label class="check"><input type="checkbox" id="chk-conflicts" /> Visa fotgängarkonflikter</label>
+            </section>
+
+            <section>
+              <h2>Förarbeteende</h2>
+              <div class="field">
+                <label>Aggressivitet (snitt): <span id="aggr-val">50</span>%</label>
+                <input type="range" id="aggr" min="0" max="100" step="1" value="50" />
+              </div>
+              <div class="field">
+                <label>Osäkerhet (snitt): <span id="caut-val">40</span>%</label>
+                <input type="range" id="caut" min="0" max="100" step="1" value="40" />
+              </div>
+              <div class="field">
+                <label>Spridning: <span id="spread-val">35</span>%</label>
+                <input type="range" id="spread" min="0" max="60" step="1" value="35" />
+              </div>
+              <label class="check"><input type="checkbox" id="chk-overtake" checked /> Tillåt omkörning i mötande fält</label>
+            </section>
+
+            <section id="sel-car" hidden>
+              <h2>Vald bil</h2>
+              <p class="hint" id="sel-state">–</p>
+              <div class="field">
+                <label>Aggressivitet: <span id="sel-aggr-val">50</span>%</label>
+                <input type="range" id="sel-aggr" min="0" max="100" step="1" value="50" />
+              </div>
+              <div class="field">
+                <label>Osäkerhet: <span id="sel-caut-val">40</span>%</label>
+                <input type="range" id="sel-caut" min="0" max="100" step="1" value="40" />
+              </div>
+              <div class="field">
+                <label>Stress: <span id="sel-stress-val">0</span>%</label>
+                <input type="range" id="sel-stress" min="0" max="100" step="1" value="0" />
+              </div>
+              <div class="row">
+                <button id="btn-follow" class="ghost">🎥 Följ</button>
+              </div>
+              <div class="row">
+                <button id="btn-crash" class="ghost">💥 Krocka</button>
+                <button id="btn-deselect" class="ghost">Avmarkera</button>
+              </div>
+            </section>
+          </div>
+
+          <!-- ===================== ANALYS ===================== -->
+          <div class="tab-page" data-page="analysis" hidden>
+            <section>
+              <h2>Analys &amp; betyg</h2>
+              <div class="row">
+                <button id="btn-analyze" class="primary">Analysera layouten</button>
+              </div>
+              <p class="hint">Kör en kort trafikbenchmark med nuvarande inställningar och sätter betyg A–F med förslag. Påverkar inte den pågående simuleringen.</p>
+              <div id="report" hidden></div>
+              <div id="ai-block">
+                <div class="field" id="ai-key-field">
+                  <label>OpenRouter-nyckel <span class="ai-note">(sparas bara lokalt i din webbläsare)</span></label>
+                  <input type="password" id="ai-key" placeholder="sk-or-v1-…" autocomplete="off" />
+                </div>
+                <div class="row">
+                  <button id="btn-ai" class="ghost" disabled>✨ Fråga Claude om planen</button>
+                </div>
+                <p class="hint">Skickar simuleringens mätvärden till <code>anthropic/claude-sonnet-5</code> via OpenRouter för en resonerande analys ovanpå den regelbaserade. Kräver nät.</p>
+                <div id="ai-out" hidden></div>
+              </div>
+            </section>
+
+            <section>
+              <h2>Exportera / spara</h2>
+              <div class="row">
+                <button id="btn-export-png" class="ghost">Exportera PNG</button>
+                <button id="btn-export-json" class="ghost">Exportera JSON</button>
+              </div>
+              <div class="row">
+                <button id="btn-import-json" class="ghost">Importera JSON</button>
+              </div>
+              <input type="file" id="import-file" accept="application/json,.json" hidden />
+              <p class="hint">PNG = ögonblicksbild av planen. JSON = hela layouten (går att importera igen).</p>
+            </section>
+          </div>
         </aside>
       </div>
     </div>
 
-    <script src="js/geometry.js?v=42"></script>
-    <script src="js/parking.js?v=42"></script>
-    <script src="js/traffic.js?v=42"></script>
-    <script src="js/render.js?v=42"></script>
-    <script src="js/report.js?v=42"></script>
-    <script src="js/app.js?v=42"></script>
+    <script src="js/geometry.js?v=43"></script>
+    <script src="js/parking.js?v=43"></script>
+    <script src="js/traffic.js?v=43"></script>
+    <script src="js/render.js?v=43"></script>
+    <script src="js/report.js?v=43"></script>
+    <script src="js/app.js?v=43"></script>
   </body>
 </html>

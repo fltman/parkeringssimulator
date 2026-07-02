@@ -1152,7 +1152,12 @@
   const aiKeyEl = document.getElementById("ai-key");
   const aiBtn = document.getElementById("btn-ai");
   const aiOut = document.getElementById("ai-out");
-  function refreshAiBtn() { aiBtn.disabled = !((aiKeyEl.value || "").trim()); }
+  function refreshAiBtn() {
+    // A tab/project switch can blank the input while localStorage still holds
+    // the key; repopulate from the saved key so the button doesn't grey out.
+    if (!(aiKeyEl.value || "").trim()) { const saved = localStorage.getItem(OR_KEY_LS); if (saved) aiKeyEl.value = saved; }
+    aiBtn.disabled = !((aiKeyEl.value || localStorage.getItem(OR_KEY_LS) || "").trim());
+  }
   aiKeyEl.value = localStorage.getItem(OR_KEY_LS) || "";
   refreshAiBtn();
   aiKeyEl.addEventListener("input", () => { localStorage.setItem(OR_KEY_LS, aiKeyEl.value.trim()); refreshAiBtn(); });
@@ -1196,7 +1201,7 @@
     "Svara på svenska med korrekt å, ä och ö. Använd markdown: en kort rubrik, 1–2 meningars sammanfattning, sedan en punktlista med högst 5 åtgärder rangordnade efter effekt. Var konkret (t.ex. 'lägg en andra infart i norr', inte 'förbättra flödet').";
 
   async function askClaude() {
-    const key = (aiKeyEl.value || "").trim();
+    const key = (aiKeyEl.value || localStorage.getItem(OR_KEY_LS) || "").trim();
     if (!key) return;
     // Make sure we have fresh metrics to send.
     let r = state._report;
@@ -1211,7 +1216,7 @@
         body: JSON.stringify({
           model: "anthropic/claude-sonnet-5",
           messages: [{ role: "system", content: AI_SYS }, { role: "user", content: aiPayload(r) }],
-          max_tokens: 900, temperature: 0.4,
+          max_tokens: 2000, temperature: 0.4,
         }),
       });
       if (!resp.ok) { const t = await resp.text(); throw new Error("HTTP " + resp.status + " — " + t.slice(0, 300)); }

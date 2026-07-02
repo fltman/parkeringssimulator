@@ -1301,35 +1301,20 @@
     loadBlank();
   }
   function switchProject(id) {
-    disarmDelete(); saveProject();
+    hideDelConfirm(); saveProject();
     const r = loadReg(); r.current = id; saveReg(r);
     loadProjectData(id); refreshProjectSelect();
   }
   function createProject() {
-    disarmDelete(); saveProject();
+    hideDelConfirm(); saveProject();
     const r = loadReg(), id = newId();
     r.items.push({ id, name: "Projekt " + (r.items.length + 1), updated: Date.now() });
     r.current = id; saveReg(r);
     loadBlank(); saveProject(); refreshProjectSelect();
     const nm = document.getElementById("project-name"); nm.focus(); nm.select();
   }
-  // Two-click delete confirmation (no blocking dialog): 🗑 → "Säker?" → delete.
-  let delArmed = false, delTimer = 0;
-  function disarmDelete() {
-    delArmed = false; clearTimeout(delTimer);
-    const btn = document.getElementById("btn-del-project");
-    btn.textContent = "🗑"; btn.classList.remove("danger");
-  }
-  function armDelete() {
-    const btn = document.getElementById("btn-del-project");
-    if (!delArmed) {
-      delArmed = true; btn.textContent = "Säker?"; btn.classList.add("danger");
-      delTimer = setTimeout(disarmDelete, 3000);
-      return;
-    }
-    disarmDelete();
-    deleteProject();
-  }
+  // Inline delete confirmation (no blocking dialog): 🗑 → "Ta bort? [Ja] [Avbryt]".
+  function hideDelConfirm() { document.getElementById("del-confirm").hidden = true; }
   function deleteProject() {
     const r = loadReg(); if (!r.current) return;
     try { localStorage.removeItem(projKey(r.current)); } catch (e) {}
@@ -1347,7 +1332,9 @@
   }
   document.getElementById("project-select").addEventListener("change", (e) => switchProject(e.target.value));
   document.getElementById("btn-new-project").addEventListener("click", createProject);
-  document.getElementById("btn-del-project").addEventListener("click", armDelete);
+  document.getElementById("btn-del-project").addEventListener("click", () => { document.getElementById("del-confirm").hidden = false; });
+  document.getElementById("btn-del-yes").addEventListener("click", () => { hideDelConfirm(); deleteProject(); });
+  document.getElementById("btn-del-no").addEventListener("click", hideDelConfirm);
   document.getElementById("project-name").addEventListener("input", (e) => { renameProject(e.target.value.trim()); scheduleSave(); });
 
   document.getElementById("btn-export-json").addEventListener("click", () => {

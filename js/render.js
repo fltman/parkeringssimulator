@@ -215,10 +215,24 @@
     }
   }
 
-  function drawBuildings(ctx, cam, buildings, selection) {
+  // Visitor pill above a building (drawn upright in screen space): current
+  // visitors now, and total visits so far — "👤 3 · 42".
+  function drawVisitorBadge(ctx, sx, sy, now, total) {
+    const txt = "👤 " + now + (total != null ? "  ·  " + total : "");
+    ctx.font = "700 11px system-ui, sans-serif";
+    const w = ctx.measureText(txt).width + 14, h = 17;
+    ctx.fillStyle = "rgba(59,91,219,0.94)";
+    if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(sx - w / 2, sy - h / 2, w, h, 8.5); ctx.fill(); }
+    else ctx.fillRect(sx - w / 2, sy - h / 2, w, h);
+    ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(txt, sx, sy);
+  }
+  function drawBuildings(ctx, cam, buildings, selection, visitors, totals) {
     for (let i = 0; i < buildings.length; i++) {
       const b = buildings[i];
       const sel = selection && selection.type === "building" && selection.index === i;
+      const nv = visitors ? visitors[i] : 0;
+      const tv = totals ? (totals[i] || 0) : 0;
       if (b.poly && b.poly.length >= 3) {
         polyPath(ctx, cam, b.poly);
         ctx.fillStyle = b.fill || BUILDING_FILLS[i % BUILDING_FILLS.length];
@@ -230,6 +244,7 @@
         ctx.fillStyle = "rgba(40,50,40,0.85)"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
         ctx.font = "600 12px system-ui, sans-serif"; ctx.fillText(b.name || "Retail", cs[0], cs[1] - 8);
         ctx.font = "11px system-ui, sans-serif"; ctx.fillText("BTA " + gfa.toLocaleString() + " m²", cs[0], cs[1] + 8);
+        if (nv > 0 || tv > 0) drawVisitorBadge(ctx, cs[0], cs[1] - 24, nv, tv);
         continue;
       }
       const s = PS.w2s(cam, b.x + b.w / 2, b.y + b.h / 2);
@@ -250,6 +265,7 @@
       ctx.font = "11px system-ui, sans-serif";
       ctx.fillText("BTA " + gfa.toLocaleString() + " m²", 0, 8);
       ctx.restore();
+      if (nv > 0 || tv > 0) drawVisitorBadge(ctx, s[0], s[1] - 24, nv, tv); // upright, in screen space
     }
   }
 
@@ -517,7 +533,27 @@
       if (state.traffic && PS.drawPeds) PS.drawPeds(ctx, cam, state);
       ctx.restore();
     }
-    drawBuildings(ctx, cam, state.buildings, state.selection);
+    // Live visitor counts: cars currently parked-and-visiting each building.
+    let visitors = null;
+    if (state.traffic && state.traffic.cars && state.buildings && state.buildings.length) {
+      visitors = new Array(state.buildings.length).fill(0);
+      for (const c of state.traffic.cars) {
+        if (c.state === "parked" && c.destB != null && c.destB >= 0 && c.destB < visitors.length) visitors[c.destB]++;
+      }
+    }
+    const visitTotals = state.traffic && state.traffic.visitTotals;
+    drawBuildings(ctx, cam, state.buildings, state.selection, visitors, visitTotals);
+    // Entrance markers: where each building's visitors walk in (this is the
+    // point parking is drawn toward). Small door-coloured dot on the edge.
+    if (state.traffic && state.traffic.net && state.traffic.net.doors) {
+      for (const d of state.traffic.net.doors) {
+        if (!d) continue;
+        const s = PS.w2s(cam, d[0], d[1]);
+        ctx.beginPath(); ctx.arc(s[0], s[1], 3.5, 0, Math.PI * 2);
+        ctx.fillStyle = "#e8590c"; ctx.fill();
+        ctx.strokeStyle = "#fff"; ctx.lineWidth = 1.5; ctx.stroke();
+      }
+    }
     if (manual) drawManualOverlay(ctx, cam, state);
     if (manual && state.showConn) drawConnections(ctx, cam, state);
     if (state.traffic && PS.drawGates) PS.drawGates(ctx, cam, state);

@@ -339,7 +339,21 @@
       }
       cuts.sort((a, b) => a.t - b.t);
       let prev = -1;
-      for (const c of cuts) { const nid = nodeAt(c.p[0], c.p[1]); if (prev >= 0 && nid !== prev) addEdge(prev, nid, oneway); prev = nid; }
+      for (const c of cuts) {
+        const nid = nodeAt(c.p[0], c.p[1]);
+        if (prev >= 0 && nid !== prev) {
+          // Clip a two-way road/aisle where it runs inside a roundabout's
+          // carriageway, so an approach road ENDS at the ring instead of
+          // protruding into it — cars then merge (and give way) at the edge.
+          let skip = false;
+          if (!oneway) {
+            const mx = (nodes[prev].x + nodes[nid].x) / 2, my = (nodes[prev].y + nodes[nid].y) / 2;
+            for (const rb of rounds) if (Math.hypot(mx - rb.x, my - rb.y) < rb.r) { skip = true; break; }
+          }
+          if (!skip) addEdge(prev, nid, oneway);
+        }
+        prev = nid;
+      }
     }
     for (let i = 0; i < nodes.length; i++) if (!adj[i]) adj[i] = [];
     if (!edges.length) return null;
@@ -388,12 +402,23 @@
 
     const aisleNodes = edges.map((e) => [{ node: e.a, along: 0 }, { node: e.b, along: e.len }]);
 
-    const centroid = g.centroid(state.site);
+    // The entrance sits on the building edge facing its nearest drive access
+    // (a road or parking aisle) — the side visitors actually arrive from. Since
+    // parking choice pulls stalls toward the door, this makes cars park on the
+    // access side. (It previously faced the leftover site centroid, which is
+    // meaningless on a traced/real-map layout.)
+    function nearestNodeXY(px, py) {
+      let bx = px, by = py, bd = Infinity;
+      for (const n of nodes) { const dd = (n.x - px) * (n.x - px) + (n.y - py) * (n.y - py); if (dd < bd) { bd = dd; bx = n.x; by = n.y; } }
+      return [bx, by];
+    }
     const doors = (state.buildings || []).map((b) => {
-      if (b.poly && b.poly.length >= 3) return g.polyEdgeMidNearest(b.poly, centroid);
+      const c = (b.poly && b.poly.length >= 3) ? g.centroid(b.poly) : [b.x + b.w / 2, b.y + b.h / 2];
+      const target = nearestNodeXY(c[0], c[1]);
+      if (b.poly && b.poly.length >= 3) return g.polyEdgeMidNearest(b.poly, target);
       const mids = g.rectPoints(b.x + b.w / 2, b.y + b.h / 2, b.w, b.h, b.rot || 0, true);
       let best = mids[0], bd = Infinity;
-      for (const m of mids) { const d = Math.hypot(m[0] - centroid[0], m[1] - centroid[1]); if (d < bd) { bd = d; best = m; } }
+      for (const m of mids) { const d = Math.hypot(m[0] - target[0], m[1] - target[1]); if (d < bd) { bd = d; best = m; } }
       return best;
     });
 
@@ -630,6 +655,68 @@
       return segs.concat(nodesToSegments(net, ids)).filter((sg) => sg.len > 0.01);
     }
 
+    // ---- dynamic re-routing (a stuck car looks for a way around the jam) -----
+    // Congestion-weighted forward Dijkstra from a node: a busy edge costs more,
+    // so the fresh route steers around queues. Blocked edges are impassable.
+    function dijkstraCong(src) {
+      const net = sim.net, n = net.nodes.length;
+      const dist = new Array(n).fill(Infinity), prev = new Array(n).fill(-1), done = new Array(n).fill(false);
+      if (src < 0) return { dist, prev };
+      dist[src] = 0;
+      for (let it = 0; it < n; it++) {
+        let u = -1, ud = Infinity;
+        for (let k = 0; k < n; k++) if (!done[k] && dist[k] < ud) { ud = dist[k]; u = k; }
+        if (u < 0) break; done[u] = true;
+        for (const e of net.adj[u]) {
+          const ed = net.edges[e.edge];
+          if (ed.block >= 1) continue;
+          const nd = dist[u] + ed.len * (1 + 6 * (ed.cong || 0)); // strongly penalise congested edges so a clear detour wins
+          if (nd < dist[e.to]) { dist[e.to] = nd; prev[e.to] = u; }
+        }
+      }
+      return { dist, prev };
+    }
+    // Rebuild a car's remaining path from the node it's heading to, routing
+    // around congestion. Keeps the current segment, then splices the new route.
+    function reroute(car) {
+      const net = sim.net, li = car._li;
+      if (!li || li.laneKey == null || li.endNode == null || li.endNode < 0) return false; // only from a real junction
+      const startNode = li.endNode;
+      const dij = dijkstraCong(startNode);
+      let tail = null;
+      if (car.state === "toStall") {
+        const sa = net.stallAccess[car.stallIdx];
+        if (!sa) return false;
+        const ap = approachFor(net, sa, dij.dist);
+        if (!ap || !isFinite(dij.dist[ap.nd.node])) return false;
+        const ids = reconstruct(dij.prev, ap.nd.node);
+        if (ids[0] !== startNode) return false;
+        const segs = nodesToSegments(net, ids);
+        segs.push(alongSeg(net, sa, ap));
+        const s = state.parking.stalls[car.stallIdx];
+        segs.push({ x1: sa.access[0], y1: sa.access[1], x2: s.cx, y2: s.cy, len: Math.hypot(s.cx - sa.access[0], s.cy - sa.access[1]), laneKey: null, edgeId: -1, startNode: -1, endNode: null });
+        tail = segs;
+      } else if (car.state === "toExit") {
+        let bx = -1, bd = Infinity;
+        for (const ex of net.exits) if (isFinite(dij.dist[ex]) && dij.dist[ex] < bd) { bd = dij.dist[ex]; bx = ex; }
+        if (bx < 0) return false;
+        const ids = reconstruct(dij.prev, bx);
+        if (ids[0] !== startNode || ids.length < 2) return false;
+        tail = nodesToSegments(net, ids);
+      } else return false;
+      tail = tail.filter((sg) => sg.len > 0.01);
+      if (!tail.length) return false;
+      // If the congestion-optimal route starts with the SAME edge the car was
+      // already taking, there's no better way around — leave it be (don't churn,
+      // and let its stuck-timer keep running toward give-up).
+      const oldNext = car.path[car.segIndex + 1];
+      if (oldNext && tail[0] && oldNext.edgeId != null && oldNext.edgeId >= 0 && oldNext.edgeId === tail[0].edgeId) return false;
+      car.path = [car.path[car.segIndex]].concat(tail); // keep current segment; splice new route from its end node
+      car.segIndex = 0;
+      setPose(car);
+      return true;
+    }
+
     // ---- car helpers ----
     function setPose(car) {
       const seg = car.path[car.segIndex];
@@ -690,6 +777,16 @@
       for (let i = 0; i < b.length; i++) { r -= w[i]; if (r <= 0) return i; }
       return b.length - 1;
     }
+    // Visit length scales with building size — a bigger building (more floor
+    // area) keeps each visitor longer. Factor = sqrt of this building's floor
+    // area relative to the average building, clamped so it stays sensible.
+    function dwellFactorFor(destB) {
+      const bs = state.buildings;
+      if (destB == null || destB < 0 || !bs || !bs.length || !bs[destB]) return 1;
+      let sum = 0; for (const x of bs) sum += footprint(x) * (x.floors || 1);
+      const mean = sum / bs.length || 1;
+      return g.clamp(Math.sqrt((footprint(bs[destB]) * (bs[destB].floors || 1)) / mean), 0.5, 3);
+    }
     // Pick a free stall as close as possible to the destination building's door
     // (randomised among the nearest handful, so drivers compete for close spots).
     function chooseStall(destB) {
@@ -748,6 +845,11 @@
       sim.recentSearch.push(search);
       if (sim.recentSearch.length > 40) sim.recentSearch.shift();
       sim.parkedTotal++;
+      // Count this visit toward the destination building's running total.
+      if (car.destB != null && car.destB >= 0) {
+        if (!sim.visitTotals) sim.visitTotals = {};
+        sim.visitTotals[car.destB] = (sim.visitTotals[car.destB] || 0) + 1;
+      }
       // Send a pedestrian to the destination building; its round trip drives the
       // dwell time. Without a building, fall back to a plain timer.
       const door = (car.destB != null && car.destB >= 0 && sim.net.doors[car.destB]) ? sim.net.doors[car.destB] : null;
@@ -755,7 +857,7 @@
         car.departAt = Infinity;
         sim.peds.push({ car, stall: [s.cx, s.cy], door: [door[0], door[1]], x: s.cx, y: s.cy, phase: "toDoor", speed: 1.1 + 0.5 * sim.rng(), shopUntil: 0, gawk: false });
       } else {
-        car.departAt = sim.t + dwellSeconds();
+        car.departAt = sim.t + dwellSeconds() * dwellFactorFor(car.destB);
       }
     }
     function startLeaving(car) {
@@ -924,22 +1026,15 @@
         if (!car.overtaking && li.endNode != null && car.segIndex < car.path.length - 1) {
           let blocked = false;
           const nseg = car.path[car.segIndex + 1];
+          // A car already circulating a roundabout (on a one-way ring edge) keeps
+          // priority: it does not yield to entering traffic at the ring node.
+          // (Entering cars give way geometrically further below.)
           const curOnRing = li.edgeId >= 0 && sim.net.edges[li.edgeId] && sim.net.edges[li.edgeId].oneway;
-          const nextOnRing = nseg.edgeId >= 0 && sim.net.edges[nseg.edgeId] && sim.net.edges[nseg.edgeId].oneway;
           if (!curOnRing) {
             const w = nodeWinner.get(li.endNode);
             if (w && w.car !== car) blocked = true;
             const occ = nodeBusy.get(li.endNode);
             if (occ) for (const o of occ) { if (o !== car) { blocked = true; break; } }
-            // Give way to circulating traffic when entering a roundabout: yield
-            // to any car already on the ring approaching this same entry node.
-            if (nextOnRing) {
-              for (const o of movers) {
-                if (o === car) continue;
-                const oe = sim.net.edges[o._li.edgeId];
-                if (oe && oe.oneway && o._li.endNode === li.endNode && o._li.remaining < NODE_APPROACH + 3) { blocked = true; break; }
-              }
-            }
           }
           // Both cases: don't pile into an occupied next lane or a blocked edge.
           if (nseg.laneKey != null) {
@@ -969,6 +1064,33 @@
           const ahead = rx * hx + ry * hy;
           if (ahead > 0 && ahead < 7 && Math.abs(-rx * hy + ry * hx) < 2.2) {
             move = Math.min(move, Math.max(0, ahead - 2.6));
+          }
+        }
+
+        // Roundabout give-way: a car about to merge onto a one-way RING edge
+        // yields to any car already circulating (on a one-way edge) that's near
+        // the merge point and coming round toward it — braking before the merge
+        // node. Classifying by the one-way ring edge (not by distance to the
+        // centre) is what makes this work even when the approach road ends
+        // INSIDE the carriageway: the approaching car is still on a two-way
+        // road edge, so it's correctly treated as entering, not circulating.
+        if (car.segIndex < car.path.length - 1) {
+          const curRing = li.edgeId >= 0 && sim.net.edges[li.edgeId] && sim.net.edges[li.edgeId].oneway;
+          const nseg = car.path[car.segIndex + 1];
+          const nextRing = nseg.edgeId >= 0 && sim.net.edges[nseg.edgeId] && sim.net.edges[nseg.edgeId].oneway;
+          if (!curRing && nextRing && li.endNode != null) {
+            const P = sim.net.nodes[li.endNode];
+            let give = false;
+            for (const o of movers) {
+              if (o === car) continue;
+              const oe = sim.net.edges[o._li.edgeId];
+              if (!oe || !oe.oneway) continue;                 // o must be circulating on a ring
+              if ((o.v || 0) < 0.5) continue;                  // ignore a STOPPED ring car (else entry/ring deadlock)
+              const rx = P.x - o.x, ry = P.y - o.y, d = Math.hypot(rx, ry);
+              if (d > 8) continue;                              // only a genuinely close car — otherwise accept the gap
+              if (d < 2 || rx * (o.hx || 0) + ry * (o.hy || 0) > 0) { give = true; break; } // right at / approaching the entry
+            }
+            if (give) { sim._giveWays = (sim._giveWays || 0) + 1; move = Math.min(move, Math.max(0, li.remaining - STOP_OFFSET)); } // hold before merging
           }
         }
 
@@ -1019,6 +1141,29 @@
         if (car.v < 0.6) { tr.stress = Math.min(1, tr.stress + dt * (0.02 + 0.05 * tr.stressProne)); car.stuck = (car.stuck || 0) + dt; }
         else { tr.stress = Math.max(0, tr.stress - dt * 0.05); car.stuck = 0; }
 
+        // Re-planning as a PROACTIVE driver decision: react to congestion on the
+        // road AHEAD (current + next edge), independent of the car's own speed —
+        // aggressive drivers (the impatient overtakers, who otherwise never sit
+        // still long enough to trip a stuck-timer) divert early at a low
+        // congestion level; patient drivers only re-plan once a jam is severe.
+        // Only from a graph edge heading to a junction. Throttled globally
+        // (≤ ~1 Dijkstra / 0.4 s sim time) and per car; the attempt is marked
+        // whether or not a better route existed, so a stuck car with no
+        // alternative keeps counting toward give-up.
+        const curEdge = li.edgeId >= 0 ? sim.net.edges[li.edgeId] : null;
+        const nextSeg = car.path[car.segIndex + 1];
+        const nextEdge = nextSeg && nextSeg.edgeId >= 0 ? sim.net.edges[nextSeg.edgeId] : null;
+        const congAhead = Math.max(curEdge ? (curEdge.cong || 0) : 0, nextEdge ? (nextEdge.cong || 0) : 0);
+        const congGate = 0.7 - 0.3 * (tr.aggr || 0);       // aggr 1 → 0.40, aggr 0 → 0.70 (aggressive react to a milder jam)
+        const rerouteCooldown = 4 + 8 * (1 - (tr.aggr || 0)); // aggr 1 → 4 s, aggr 0 → 12 s (aggressive re-plan more often)
+        if (!car.crashed && congAhead > congGate &&
+            li.laneKey != null && li.endNode != null && li.endNode >= 0 &&
+            (sim.t - (sim._lastRerouteT || -1e9) >= 0.3) &&
+            (sim.t - (car._reroutedAt || -1e9)) > rerouteCooldown) {
+          car._reroutedAt = sim.t; sim._lastRerouteT = sim.t; sim._rerouteAttempts = (sim._rerouteAttempts || 0) + 1;
+          if (reroute(car)) { car.stuck = 0; car._didReroute = true; sim.reroutes = (sim.reroutes || 0) + 1; }
+        }
+
         // Frustration: stuck far too long → give up and vanish (self-heals any
         // gridlock, and keeps a fully jammed lot from locking forever).
         if (!car.crashed && car.stuck > 120) {
@@ -1048,7 +1193,7 @@
         const stepd = ped.speed * dt;
         if (d <= stepd) {
           ped.x = tgt[0]; ped.y = tgt[1];
-          if (ped.phase === "toDoor") { ped.phase = "inBuilding"; ped.shopUntil = sim.t + dwellSeconds() * 0.6; }
+          if (ped.phase === "toDoor") { ped.phase = "inBuilding"; ped.shopUntil = sim.t + dwellSeconds() * 0.6 * dwellFactorFor(ped.car.destB); }
           else { ped._done = true; startLeaving(ped.car); }
         } else { ped.x += (dx / d) * stepd; ped.y += (dy / d) * stepd; }
       }
@@ -1115,6 +1260,7 @@
     sim.rebuild = function () {
       sim.net = PS.buildNetwork(state);
       sim.entCount = null; sim._gateAcc = null; // reset per-entrance arrival streams for the new network
+      sim.visitTotals = {};
       sim.cars = [];
       sim.peds = [];
       sim.conflict.clear();
@@ -1142,7 +1288,7 @@
     sim.reseed = function (seed) {
       sim.seed = seed; sim.rng = mulberry32(seed);
       sim.t = 0; sim.parkedTotal = 0; sim.turnedAway = 0; sim.collisions = 0; sim.gaveUp = 0; sim._arrAcc = 0; sim.recentSearch = [];
-      sim.peds = []; sim.conflict.clear(); sim._crashPts = []; sim.entCount = null; sim._gateAcc = null;
+      sim.peds = []; sim.conflict.clear(); sim._crashPts = []; sim.entCount = null; sim._gateAcc = null; sim.visitTotals = {}; sim.reroutes = 0;
     };
     // Force a car to stall/crash: it stops and blocks its lane for a while.
     sim.crash = function (car) {

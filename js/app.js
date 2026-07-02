@@ -412,7 +412,15 @@
       if (vi >= 0) { drag = { type: "vertex", index: vi }; return; }
     }
 
-    // Manual layout drawing tools take priority.
+    // Building-draw works in BOTH automatic and manual mode (buildings aren't a
+    // "manual layout" thing — they matter either way).
+    if (state.tool === "bldg" && !state.editSite) {
+      if (!state._draft || state._draft.type !== "poly" || state._draft.kind !== "bldg") state._draft = { type: "poly", kind: "bldg", pts: [], cursor: w };
+      const pts = state._draft.pts;
+      if (pts.length >= 3 && Math.hypot(pts[0][0] - w[0], pts[0][1] - w[1]) < 3) { finishPoly(); return; }
+      pts.push([w[0], w[1]]); requestDraw(); return;
+    }
+    // The other drawing tools (roads, parking sections, roundabouts) are manual-only.
     if (state.layoutMode === "manual" && state.tool !== "select") {
       if (state.tool === "road") {
         if (!state._draft || state._draft.type !== "road") state._draft = { type: "road", pts: [], cursor: w };
@@ -420,9 +428,9 @@
         if (pts.length >= 2 && Math.hypot(pts[0][0] - w[0], pts[0][1] - w[1]) < 3) { finishRoad(); return; }
         pts.push([w[0], w[1]]); requestDraw(); return;
       }
-      if (state.tool === "section" || state.tool === "bldg") {
+      if (state.tool === "section") {
         // Click out anchor points; click the first point again (or dblclick/Enter) to finish.
-        if (!state._draft || state._draft.type !== "poly" || state._draft.kind !== state.tool) state._draft = { type: "poly", kind: state.tool, pts: [], cursor: w };
+        if (!state._draft || state._draft.type !== "poly" || state._draft.kind !== "section") state._draft = { type: "poly", kind: "section", pts: [], cursor: w };
         const pts = state._draft.pts;
         if (pts.length >= 3 && Math.hypot(pts[0][0] - w[0], pts[0][1] - w[1]) < 3) { finishPoly(); return; }
         pts.push([w[0], w[1]]); requestDraw(); return;
@@ -505,7 +513,7 @@
     if (state.layoutMode === "manual" && state.tool === "road" && state._draft && state._draft.type === "road" && !drag) {
       state._draft.cursor = mouseWorld(e); requestDraw(); return;
     }
-    if (state.layoutMode === "manual" && (state.tool === "section" || state.tool === "bldg") && state._draft && state._draft.type === "poly" && !drag) {
+    if ((state.tool === "bldg" || (state.layoutMode === "manual" && state.tool === "section")) && state._draft && state._draft.type === "poly" && !drag) {
       state._draft.cursor = mouseWorld(e); requestDraw(); return;
     }
     if (!drag) return;
@@ -612,7 +620,7 @@
     }
     if (e.key === "Enter" && state._draft && state._draft.type === "road") { finishRoad(); e.preventDefault(); }
     if (e.key === "Enter" && state._draft && state._draft.type === "poly") { finishPoly(); e.preventDefault(); }
-    if (e.key === "Escape" && state._draft) { state._draft = null; requestDraw(); }
+    if (e.key === "Escape" && state._draft) { state._draft = null; if (state.tool === "bldg") setTool("select"); else requestDraw(); }
   });
   canvas.addEventListener("dblclick", (e) => {
     if (state._draft && state._draft.type === "road") { finishRoad(); return; }
@@ -744,6 +752,7 @@
   // Finish a clicked-out polygon → a building or a parking section.
   function finishPoly() {
     const d = state._draft;
+    const wasBldg = d && d.type === "poly" && d.kind === "bldg";
     if (d && d.type === "poly" && d.pts.length >= 3) {
       const poly = d.pts.map((p) => [p[0], p[1]]);
       if (d.kind === "bldg") {
@@ -757,6 +766,7 @@
       syncSelectionUI(); regen();
     }
     state._draft = null; requestDraw();
+    if (wasBldg) setTool("select"); // building draw is one-shot; return to the cursor
   }
 
   // ---- panel tabs (Konstruera / Simulera / Analys) ----
@@ -923,6 +933,7 @@
     document.getElementById("manual-tools").hidden = true;
     segSetActive("layout-seg", "auto");
     segSetActive("tool-seg", "select");
+    document.getElementById("btn-draw-bldg").classList.remove("primary");
     retailCount = state.buildings.length;
     state.decor = buildDecor(state.site);
     state.selection = null;
@@ -953,10 +964,24 @@
   segBind("orient-seg", (v) => { state.params.orientation = v; regen(); requestDraw(); });
   segBind("base-seg", (v) => setBasemap(v));
 
+  // Active drawing tool. "bldg" (draw a polygon building) works in both automatic
+  // and manual mode; the rest are manual tools. Keeps the tool-seg and the "Rita"
+  // button highlight in sync.
+  function setTool(v) {
+    state.tool = v;
+    segSetActive("tool-seg", v); // clears highlight when v isn't in the seg (e.g. "bldg")
+    document.getElementById("btn-draw-bldg").classList.toggle("primary", v === "bldg");
+    state._draft = null;
+    if (v !== "select") { state.selection = null; syncSelectionUI(); }
+    requestDraw();
+  }
+
   function setLayoutMode(mode) {
     state.layoutMode = mode;
     document.getElementById("manual-tools").hidden = mode !== "manual";
-    if (mode !== "manual") { state.tool = "select"; }
+    state.tool = "select";
+    segSetActive("tool-seg", "select");
+    document.getElementById("btn-draw-bldg").classList.remove("primary");
     state._draft = null;
     state.selection = null;
     syncSelectionUI();
@@ -965,7 +990,8 @@
     requestDraw();
   }
   segBind("layout-seg", (v) => setLayoutMode(v));
-  segBind("tool-seg", (v) => { state.tool = v; state._draft = null; if (v !== "select") { state.selection = null; syncSelectionUI(); } requestDraw(); });
+  segBind("tool-seg", (v) => setTool(v));
+  document.getElementById("btn-draw-bldg").addEventListener("click", () => setTool(state.tool === "bldg" ? "select" : "bldg"));
 
   function updateSelSection(key, val) {
     if (state.selection && state.selection.type === "section") {
@@ -1203,6 +1229,7 @@
     segSetActive("layout-seg", state.layoutMode);
     document.getElementById("manual-tools").hidden = state.layoutMode !== "manual";
     segSetActive("tool-seg", "select"); state.tool = "select";
+    document.getElementById("btn-draw-bldg").classList.remove("primary");
     segSetActive("angle-seg", String(state.params.angle));
     segSetActive("orient-seg", state.params.orientation);
     setSlider("setback", "setback-val", state.params.siteSetback);

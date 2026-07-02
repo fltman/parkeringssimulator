@@ -97,7 +97,7 @@ html, body {
 .tab-page[hidden] { display: none; }
 
 /* tool grid (manual layout tools) */
-.toolgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.toolgrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
 .toolgrid button {
   border: 1px solid var(--line); border-radius: 9px; background: #fff;
   padding: 9px 4px; font-size: 12px; color: var(--ink); cursor: pointer;

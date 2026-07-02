@@ -43,12 +43,13 @@
             <section>
               <h2>Byggnader</h2>
               <div class="row">
-                <button id="btn-add" class="primary">+ Lägg till byggnad</button>
+                <button id="btn-add" class="primary">+ Byggnad</button>
+                <button id="btn-draw-bldg" class="ghost">✏️ Rita</button>
               </div>
               <div class="row">
                 <button id="btn-del" class="ghost" disabled>Ta bort markerad</button>
               </div>
-              <p class="hint" id="sel-hint">Klicka en byggnad för att flytta / ändra storlek. Dra hörnen för att skala.</p>
+              <p class="hint" id="sel-hint">"+ Byggnad" ger en fyrkant att flytta / skala / rotera. "Rita" ritar en byggnad som polygon (klicka ut hörn, dubbelklick avslutar). Fungerar i både automatiskt och manuellt läge.</p>
               <div class="field" id="floors-field" hidden>
                 <label>Våningar: <span id="floors-val">1</span></label>
                 <input type="range" id="floors" min="1" max="6" step="1" value="1" />
@@ -65,13 +66,14 @@
             </section>
 
             <section>
-              <h2>Layout</h2>
+              <h2>Parkeringsläge</h2>
               <div class="field">
                 <div class="seg" id="layout-seg">
-                  <button data-v="auto" class="on">Auto</button>
+                  <button data-v="auto" class="on">Automatisk</button>
                   <button data-v="manual">Manuell</button>
                 </div>
               </div>
+              <p class="hint">Automatisk: parkeringen fylls över hela tomten runt byggnaderna (styrs av inställningarna nedan). Manuell: du ritar vägar, parkeringssektioner och rondeller själv.</p>
               <div id="manual-tools" hidden>
                 <div class="field">
                   <label>Verktyg</label>
@@ -79,11 +81,10 @@
                     <button data-v="select" class="on">Markör</button>
                     <button data-v="road">Väg</button>
                     <button data-v="section">Sektion</button>
-                    <button data-v="bldg">Byggnad</button>
                     <button data-v="round">Rondell</button>
                   </div>
                 </div>
-                <p class="hint">Väg / Sektion / Byggnad: klicka ut ankarpunkter, dubbelklick eller Enter avslutar (klicka första punkten för att stänga). Rondell: dra. Markera en yta för att dra dess ankarpunkter; dubbelklick på en kant lägger till en ny punkt. Korsningar skapas där vägar möts.</p>
+                <p class="hint">Väg / Sektion: klicka ut ankarpunkter, dubbelklick eller Enter avslutar (klicka första punkten för att stänga). Rondell: dra. Markera en yta för att dra dess ankarpunkter; dubbelklick på en kant lägger till en ny punkt. Korsningar skapas där vägar möts.</p>
                 <div class="row"><button id="btn-clear-layout" class="ghost">Rensa layout</button></div>
               </div>
             </section>
@@ -280,11 +281,11 @@
       </div>
     </div>
 
-    <script src="js/geometry.js?v=43"></script>
-    <script src="js/parking.js?v=43"></script>
-    <script src="js/traffic.js?v=43"></script>
-    <script src="js/render.js?v=43"></script>
-    <script src="js/report.js?v=43"></script>
-    <script src="js/app.js?v=43"></script>
+    <script src="js/geometry.js?v=44"></script>
+    <script src="js/parking.js?v=44"></script>
+    <script src="js/traffic.js?v=44"></script>
+    <script src="js/render.js?v=44"></script>
+    <script src="js/report.js?v=44"></script>
+    <script src="js/app.js?v=44"></script>
   </body>
 </html>

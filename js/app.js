@@ -567,7 +567,11 @@
     e.preventDefault();
     if (state.mapMode && state.map) {
       const scr = mouseScreen(e);
-      state.map.setZoomAround(window.L.point(scr[0], scr[1]), state.map.getZoom() + (e.deltaY < 0 ? 0.5 : -0.5));
+      // Zoom by an amount PROPORTIONAL to the scroll delta (Leaflet levels are
+      // already log-scaled), capped per event so a trackpad's many small events
+      // or one big wheel notch don't rocket in/out. Matches the styled-mode feel.
+      const dz = g.clamp(-e.deltaY * 0.002, -0.35, 0.35);
+      state.map.setZoomAround(window.L.point(scr[0], scr[1]), state.map.getZoom() + dz);
       return; // map 'zoom' resyncs cam
     }
     const scr = mouseScreen(e);

@@ -99,7 +99,6 @@
     decor: null,
     parking: null,
     selection: null, // { type:'building', index } | { type:'vertex', index }
-    editSite: false,
     showDims: false,
     siteName: "Site A",
     params: Object.assign({}, PS.defaults),
@@ -393,26 +392,13 @@
     if (Math.hypot(eS[0] - scr[0], eS[1] - scr[1]) <= HANDLE_PX + 2) return "radius";
     return null;
   }
-  function vertexAt(scr) {
-    for (let i = 0; i < state.site.length; i++) {
-      const s = PS.w2s(state.cam, state.site[i][0], state.site[i][1]);
-      if (Math.hypot(s[0] - scr[0], s[1] - scr[1]) <= HANDLE_PX + 2) return i;
-    }
-    return -1;
-  }
-
   canvas.addEventListener("mousedown", (e) => {
     const w = mouseWorld(e);
     const scr = mouseScreen(e);
 
-    if (state.editSite) {
-      const vi = vertexAt(scr);
-      if (vi >= 0) { drag = { type: "vertex", index: vi }; return; }
-    }
-
     // Building-draw works in BOTH automatic and manual mode (buildings aren't a
     // "manual layout" thing — they matter either way).
-    if (state.tool === "bldg" && !state.editSite) {
+    if (state.tool === "bldg") {
       if (!state._draft || state._draft.type !== "poly" || state._draft.kind !== "bldg") state._draft = { type: "poly", kind: "bldg", pts: [], cursor: w };
       const pts = state._draft.pts;
       if (pts.length >= 3 && Math.hypot(pts[0][0] - w[0], pts[0][1] - w[1]) < 3) { finishPoly(); return; }
@@ -437,7 +423,7 @@
     }
     // Edit handles of the current selection (resize/rotate a rect, move a road
     // vertex, or a roundabout centre/radius) — checked before re-selecting.
-    if (!state.editSite && !(state.layoutMode === "manual" && state.tool !== "select")) {
+    if (!(state.layoutMode === "manual" && state.tool !== "select")) {
       const pv = polyVertexAt(scr);
       if (pv >= 0) { drag = { type: "polyvertex", vi: pv }; return; }
       const rh = rectHandleAt(scr);
@@ -468,22 +454,20 @@
     }
 
     // Select a moving car if one is under the cursor (takes priority).
-    if (!state.editSite && state.traffic && state.traffic.net) {
+    if (state.traffic && state.traffic.net) {
       const car = state.traffic.pickCar(w[0], w[1], 4);
       if (car) { selectCar(car); return; }
     }
 
     // Select / drag an entrance or exit gate.
-    if (!state.editSite) {
-      const gi = gateAt(w);
-      if (gi >= 0) {
-        if (state.traffic && state.traffic.selectedCar) deselectCar();
-        state.selection = { type: "gate", index: gi };
-        drag = { type: "gate", index: gi };
-        syncSelectionUI();
-        requestDraw();
-        return;
-      }
+    const gi = gateAt(w);
+    if (gi >= 0) {
+      if (state.traffic && state.traffic.selectedCar) deselectCar();
+      state.selection = { type: "gate", index: gi };
+      drag = { type: "gate", index: gi };
+      syncSelectionUI();
+      requestDraw();
+      return;
     }
 
     const bi = buildingAt(w);
@@ -559,10 +543,6 @@
       const rb = state.roundabouts[drag.index]; rb.x = w[0]; rb.y = w[1]; requestDraw();
     } else if (drag.type === "roundradius") {
       const rb = state.roundabouts[drag.index]; rb.r = Math.max(3, Math.hypot(w[0] - rb.x, w[1] - rb.y)); requestDraw();
-    } else if (drag.type === "vertex") {
-      state.site[drag.index] = [w[0], w[1]];
-      state.decor = buildDecor(state.site);
-      requestRegen();
     } else if (drag.type === "gate") {
       state.gates[drag.index].x = w[0];
       state.gates[drag.index].y = w[1];
@@ -624,7 +604,7 @@
     if (state._draft && state._draft.type === "road") { finishRoad(); return; }
     if (state._draft && state._draft.type === "poly") { finishPoly(); return; }
     // No draft in progress → double-click a polygon edge to add an anchor point.
-    if (!state.editSite) insertPolyVertex(mouseWorld(e), mouseScreen(e));
+    insertPolyVertex(mouseWorld(e), mouseScreen(e));
   });
 
   // ---- building actions ---------------------------------------------------
@@ -1277,12 +1257,6 @@
   });
   document.getElementById("chk-dims").addEventListener("change", (e) => {
     state.showDims = e.target.checked;
-    requestDraw();
-  });
-  document.getElementById("chk-edit").addEventListener("change", (e) => {
-    state.editSite = e.target.checked;
-    canvas.classList.toggle("editing", state.editSite);
-    if (state.editSite && state.selection) { state.selection = null; syncSelectionUI(); }
     requestDraw();
   });
 

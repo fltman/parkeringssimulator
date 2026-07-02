@@ -122,11 +122,13 @@ Klicka **Analysera layouten** för att köra en kort, deterministisk trafik­ben
 med **datadrivna förslag**, och den värsta **flaskhalsen markeras animerat på
 ritytan**. Exportera planen som **PNG** eller **JSON** (och importera JSON igen).
 
-**Spara / fortsätt senare:** projektet sparas **automatiskt i webbläsaren**
-(localStorage) — inklusive kartläge och kartvy — och laddas när du kommer tillbaka.
-Appen öppnar tom första gången; **Rensa layout** tömmer allt du ritat (vägar,
-sektioner, rondeller, byggnader, in-/utfarter) och **Återställ allt** nollställer
-även det sparade projektet.
+**Projekt (spara / fortsätt senare):** projektbaren högst upp i panelen hanterar
+**flera namngivna projekt** — byt via listan, **＋** skapar ett nytt, **🗑** tar
+bort, och namnfältet döper om. Varje projekt sparas **automatiskt i webbläsaren**
+(localStorage) — inklusive kartläge/kartvy — och laddas när du kommer tillbaka
+("✓ Sparat" visas). Appen öppnar tom första gången. **Rensa layout** tömmer allt
+du ritat (vägar, sektioner, rondeller, byggnader, in-/utfarter); **Återställ allt**
+nollställer det aktiva projektet.
 
 ### Fråga Claude (valfritt)
 Ovanpå den regelbaserade analysen kan du be **Claude** (`anthropic/claude-sonnet-5`

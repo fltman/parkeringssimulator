@@ -85,6 +85,21 @@ html, body {
 #panel section { padding: 14px 0; border-bottom: 1px solid var(--line); }
 #panel section:last-child { border-bottom: none; }
 
+/* project bar */
+#project-bar { padding: 10px 12px 8px; border-bottom: 1px solid var(--line); }
+.pb-row { display: flex; gap: 6px; align-items: center; }
+.pb-row + .pb-row { margin-top: 6px; }
+#project-name {
+  flex: 1; min-width: 0; padding: 7px 9px; font: inherit; font-size: 13px; font-weight: 700;
+  border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink);
+}
+#project-name:focus { outline: none; border-color: var(--accent); }
+#project-select { flex: 1; min-width: 0; padding: 6px 8px; font: inherit; font-size: 12.5px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink); }
+#project-bar button { padding: 6px 10px; font-size: 13px; flex: 0 0 auto; }
+#save-status { font-size: 11px; color: var(--muted); white-space: nowrap; opacity: 0; transition: opacity 0.2s; }
+#save-status.show { opacity: 1; }
+#save-status.saved { color: #2f9e44; }
+
 /* panel tabs */
 .ptabs {
   position: sticky; top: 0; z-index: 5;

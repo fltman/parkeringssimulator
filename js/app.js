@@ -1002,27 +1002,8 @@
   document.getElementById("btn-treset").addEventListener("click", resetTraffic);
   document.getElementById("btn-fit").addEventListener("click", () => resize(true));
   document.getElementById("btn-reset").addEventListener("click", () => {
-    pauseTraffic();
-    localStorage.removeItem(SAVE_KEY); // wipe the auto-saved project too
-    if (state.mapMode) { setBasemap("styled"); segSetActive("base-seg", "styled"); }
-    sim.reseed(sim.seed);
-    state.site = defaultSite();
-    state.buildings = defaultBuildings();
-    state.gates = defaultGates(state.site);
-    state.roads = []; state.sections = []; state.roundabouts = [];
-    state.layoutMode = "manual"; state.tool = "select"; state._draft = null;
-    segSetActive("tool-seg", "select");
-    document.getElementById("btn-draw-bldg").classList.remove("primary");
-    retailCount = state.buildings.length;
-    state.decor = buildDecor(state.site);
-    state.selection = null;
-    state.occupancyFrac = 0.4;
-    document.getElementById("occ").value = 40;
-    document.getElementById("occ-val").textContent = 40;
-    syncSelectionUI();
-    resize(true);
-    regen();
-    updateTrafficStats();
+    loadBlank();     // blank the current project back to defaults
+    saveProject();   // persist the cleared state
   });
 
   function segBind(id, cb) {
@@ -1244,10 +1225,19 @@
   }
   document.getElementById("btn-export-png").addEventListener("click", () => {
     PS.draw(state); // ensure a fresh frame is on the canvas
-    download(`parkering-${state.siteName || "plan"}.png`, canvas.toDataURL("image/png"), false);
+    download(`parkering-${currentName()}.png`, canvas.toDataURL("image/png"), false);
   });
-  // ---- project (de)serialisation + auto-save to localStorage --------------
-  const SAVE_KEY = "ps_project_v1";
+  // ---- projects: named, auto-saved to localStorage ------------------------
+  const REG_KEY = "ps_projects_v1", OLD_KEY = "ps_project_v1";
+  const projKey = (id) => "ps_proj_" + id;
+  function newId() { return "p" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+  function loadReg() {
+    try { const r = JSON.parse(localStorage.getItem(REG_KEY)); if (r && Array.isArray(r.items)) return r; } catch (e) {}
+    return { current: null, items: [] };
+  }
+  function saveReg(r) { try { localStorage.setItem(REG_KEY, JSON.stringify(r)); } catch (e) {} }
+  function currentName() { const r = loadReg(); const it = r.items.find((x) => x.id === r.current); return it ? it.name : "plan"; }
+
   function serializeProject() {
     return {
       app: "parkeringssimulator", version: 1,
@@ -1267,12 +1257,82 @@
     };
   }
   let saveTimer = 0;
-  function saveProject() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(serializeProject())); } catch (e) { /* quota/private mode */ } }
-  function scheduleSave() { clearTimeout(saveTimer); saveTimer = setTimeout(saveProject, 700); }
+  function setStatus(txt, saved) {
+    const el = document.getElementById("save-status");
+    if (!el) return;
+    el.textContent = txt; el.classList.toggle("saved", !!saved); el.classList.add("show");
+    if (saved) { clearTimeout(setStatus._t); setStatus._t = setTimeout(() => el.classList.remove("show"), 1600); }
+  }
+  function saveProject() {
+    const r = loadReg(); if (!r.current) return;
+    try { localStorage.setItem(projKey(r.current), JSON.stringify(serializeProject())); } catch (e) { setStatus("Kunde inte spara", false); return; }
+    const it = r.items.find((x) => x.id === r.current); if (it) { it.updated = Date.now(); saveReg(r); }
+    setStatus("✓ Sparat", true);
+  }
+  function scheduleSave() { setStatus("Sparar…", false); clearTimeout(saveTimer); saveTimer = setTimeout(saveProject, 700); }
+
+  function refreshProjectSelect() {
+    const r = loadReg(), sel = document.getElementById("project-select");
+    sel.innerHTML = "";
+    for (const it of r.items) { const o = document.createElement("option"); o.value = it.id; o.textContent = it.name; if (it.id === r.current) o.selected = true; sel.appendChild(o); }
+    document.getElementById("project-name").value = currentName();
+  }
+  function loadBlank() {
+    pauseTraffic();
+    if (state.mapMode) setBasemap("styled");
+    state.site = defaultSite();
+    state.buildings = []; state.gates = []; state.roads = []; state.sections = []; state.roundabouts = [];
+    state.layoutMode = "manual"; state.tool = "select"; state._draft = null; state.selection = null;
+    state._report = null; retailCount = 0; state.occupancyFrac = 0.4;
+    segSetActive("base-seg", "styled"); segSetActive("tool-seg", "select");
+    document.getElementById("btn-draw-bldg").classList.remove("primary");
+    document.getElementById("occ").value = 40; document.getElementById("occ-val").textContent = 40;
+    document.getElementById("report").hidden = true;
+    state.decor = buildDecor(state.site);
+    sim.reseed(sim.seed);
+    syncSelectionUI(); regen(); resize(true); updateTrafficStats(); requestDraw();
+  }
+  function loadProjectData(id) {
+    const raw = localStorage.getItem(projKey(id));
+    if (raw) { try { applyPlan(JSON.parse(raw)); return; } catch (e) { console.warn("[load]", e); } }
+    loadBlank();
+  }
+  function switchProject(id) {
+    saveProject();
+    const r = loadReg(); r.current = id; saveReg(r);
+    loadProjectData(id); refreshProjectSelect();
+  }
+  function createProject() {
+    saveProject();
+    const r = loadReg(), id = newId();
+    r.items.push({ id, name: "Projekt " + (r.items.length + 1), updated: Date.now() });
+    r.current = id; saveReg(r);
+    loadBlank(); saveProject(); refreshProjectSelect();
+    const nm = document.getElementById("project-name"); nm.focus(); nm.select();
+  }
+  function deleteProject() {
+    const r = loadReg(); if (!r.current) return;
+    try { localStorage.removeItem(projKey(r.current)); } catch (e) {}
+    r.items = r.items.filter((x) => x.id !== r.current);
+    if (r.items.length) { r.current = r.items[0].id; saveReg(r); loadProjectData(r.current); }
+    else { const id = newId(); r = { current: id, items: [{ id, name: "Mitt projekt", updated: Date.now() }] }; saveReg(r); loadBlank(); saveProject(); }
+    refreshProjectSelect();
+  }
+  function renameProject(name) {
+    const r = loadReg(), it = r.items.find((x) => x.id === r.current);
+    if (!it) return;
+    it.name = name || "Namnlöst"; saveReg(r);
+    const opt = document.querySelector('#project-select option[value="' + r.current + '"]');
+    if (opt) opt.textContent = it.name;
+  }
+  document.getElementById("project-select").addEventListener("change", (e) => switchProject(e.target.value));
+  document.getElementById("btn-new-project").addEventListener("click", createProject);
+  document.getElementById("btn-del-project").addEventListener("click", deleteProject);
+  document.getElementById("project-name").addEventListener("input", (e) => { renameProject(e.target.value.trim()); scheduleSave(); });
 
   document.getElementById("btn-export-json").addEventListener("click", () => {
     const blob = new Blob([JSON.stringify(serializeProject(), null, 2)], { type: "application/json" });
-    download("parkering-plan.json", URL.createObjectURL(blob), true);
+    download("parkering-" + currentName() + ".json", URL.createObjectURL(blob), true);
   });
   const importFile = document.getElementById("import-file");
   document.getElementById("btn-import-json").addEventListener("click", () => importFile.click());
@@ -1388,15 +1448,18 @@
   // ---- boot ---------------------------------------------------------------
   window.PSSTATE = state; // debug/testing handle
   window.addEventListener("beforeunload", saveProject); // persist on close/reload
-  let restored = false;
-  try {
-    const saved = localStorage.getItem(SAVE_KEY);
-    if (saved) { applyPlan(JSON.parse(saved)); restored = true; }
-  } catch (e) { console.warn("[restore]", e); }
-  if (!restored) { // first visit → blank canvas
-    syncSelectionUI();
-    resize(true);
-    regen();
-    requestDraw();
-  }
+  (function initProjects() {
+    let r = loadReg();
+    if (!r.items.length) { // migrate the old single-project save, if any
+      const old = localStorage.getItem(OLD_KEY);
+      const id = newId();
+      r = { current: id, items: [{ id, name: "Mitt projekt", updated: Date.now() }] };
+      if (old) { try { localStorage.setItem(projKey(id), old); } catch (e) {} localStorage.removeItem(OLD_KEY); }
+      saveReg(r);
+    }
+    if (!r.current || !r.items.some((x) => x.id === r.current)) { r.current = r.items[0].id; saveReg(r); }
+    if (localStorage.getItem(projKey(r.current))) loadProjectData(r.current);
+    else { loadBlank(); saveProject(); }
+    refreshProjectSelect();
+  })();
 })();

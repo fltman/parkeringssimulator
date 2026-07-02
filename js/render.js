@@ -437,15 +437,6 @@
     if (state._analysisWorst) drawAnalysisMarker(ctx, cam, state._analysisWorst);
     if (state.showDims && !manual) drawDims(ctx, cam, state.site);
 
-    // "Site A" banner near the top edge.
-    const bb = g.bbox(state.site);
-    const banner = PS.w2s(cam, (bb.minX + bb.maxX) / 2, bb.minY - 4);
-    ctx.fillStyle = COLORS.label;
-    ctx.font = "700 14px system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "bottom";
-    ctx.fillText(state.siteName || "Site A", banner[0], banner[1]);
-
     ctx.restore();
   };
 

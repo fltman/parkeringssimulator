@@ -301,10 +301,38 @@
     }
   }
 
+  // Re-pin the world<->ground anchor to the current map centre (keeps drawn
+  // content continuous while re-localising longitude scaling after navigating).
+  function reanchor() {
+    if (!state.map) return;
+    const c = state.map.getCenter();
+    const px = state.map.latLngToContainerPoint(c);
+    state._pin = PS.s2w(state.cam, px.x, px.y);
+    state._anchor = c;
+    syncCamFromMap();
+    requestDraw();
+  }
+  // Geocode a place name (OSM Nominatim) and fly the map there.
+  async function mapGoto(query) {
+    const q = (query || "").trim();
+    const inp = document.getElementById("map-search-input");
+    if (!q || !state.map) return;
+    inp.classList.remove("notfound");
+    try {
+      const resp = await fetch("https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" + encodeURIComponent(q), { headers: { "Accept": "application/json" } });
+      const arr = await resp.json();
+      if (!arr.length) { inp.classList.add("notfound"); return; }
+      const b = arr[0].boundingbox.map(Number); // [minLat, maxLat, minLon, maxLon]
+      state.map.fitBounds([[b[0], b[2]], [b[1], b[3]]], { animate: false, maxZoom: 17, padding: [24, 24] });
+      reanchor();
+    } catch (err) { console.error("[mapGoto]", err); inp.classList.add("notfound"); }
+  }
+
   function setBasemap(kind) {
     if (kind === "styled") {
       state.mapMode = false;
       document.getElementById("map").style.display = "none";
+      document.getElementById("map-search").hidden = true;
       resize(true);
       return;
     }
@@ -316,6 +344,7 @@
       state._anchor = state.map.getCenter(); // pin the lot centroid to the current map centre
       setBase(kind);
       state.mapMode = true;
+      document.getElementById("map-search").hidden = false;
       state.map.invalidateSize();
       syncCamFromMap();
       requestDraw();
@@ -647,6 +676,9 @@
   }, { passive: false });
 
   window.addEventListener("keydown", (e) => {
+    // Don't hijack keys while typing in a field (search box, OpenRouter key, …).
+    const t = e.target;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
     if ((e.key === "Delete" || e.key === "Backspace") && state.selection) {
       deleteSelected();
       e.preventDefault();
@@ -1001,6 +1033,9 @@
     seg.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.v === v));
   }
   segBind("base-seg", (v) => setBasemap(v));
+  document.getElementById("map-search-input").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); mapGoto(e.target.value); }
+  });
 
   // Active drawing tool. "bldg" (draw a polygon building) works via the Byggnader
   // panel; the rest are the layout drawing tools. Keeps the tool-seg and the
@@ -1036,8 +1071,9 @@
   document.getElementById("sec-rot").addEventListener("input", (e) => updateSelSection("rot", parseFloat(e.target.value)));
   document.getElementById("sec-island").addEventListener("input", (e) => updateSelSection("island", parseInt(e.target.value, 10)));
   document.getElementById("btn-clear-layout").addEventListener("click", () => {
-    state.roads = []; state.sections = []; state.roundabouts = []; state._draft = null;
-    state.selection = null; syncSelectionUI(); regen(); requestDraw();
+    state.roads = []; state.sections = []; state.roundabouts = []; state.buildings = []; retailCount = 0;
+    state._draft = null; state.selection = null;
+    syncSelectionUI(); regen(); requestDraw();
   });
 
   function rangeBind(id, valId, cb) {

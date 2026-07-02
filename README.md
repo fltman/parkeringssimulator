@@ -86,8 +86,9 @@ för trafikvärme, fotgängare, fotgängarkonflikter och mått.
 Under **Vy → Bakgrund** kan du växla mellan **Stiliserad** (den ritade kartan) och
 **Karta** — en ren, ljus gatukarta (CARTO Positron via Leaflet, laddas lazy). I
 kartläge ritas parkeringen genomskinligt ovanpå den riktiga marken i korrekt skala;
-panorera/zooma kartan för att lägga tomten över en verklig fastighet. Kräver
-internet för kartrutor; stiliserat läge funkar offline.
+panorera/zooma kartan för att lägga tomten över en verklig fastighet. Sökrutan
+**🔍 Navigera till** (uppe till vänster på kartan) flyger dig till valfri plats i
+världen (OSM Nominatim). Kräver internet för kartrutor; stiliserat läge funkar offline.
 
 ## Rita layouten
 Du ritar hela planen själv (utmärkt ovanpå kartläget för att planera en verklig

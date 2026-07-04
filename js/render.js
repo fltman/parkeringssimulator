@@ -274,9 +274,11 @@
   }
 
   // Visitor pill above a building (drawn upright in screen space): current
-  // visitors now, and total visits so far — "👤 3 · 42".
-  function drawVisitorBadge(ctx, sx, sy, now, total) {
-    const txt = "👤 " + now + (total != null ? "  ·  " + total : "");
+  // visitors now, total visits so far, and staff on site — "👤 3 · 42  👷 8".
+  // Staff are counted separately: they arrive BEFORE opening by design, and
+  // lumping them in as "visitors at a closed building" reads as a bug.
+  function drawVisitorBadge(ctx, sx, sy, now, total, staff) {
+    const txt = "👤 " + now + (total != null ? "  ·  " + total : "") + (staff > 0 ? "  👷 " + staff : "");
     ctx.font = "700 11px system-ui, sans-serif";
     const w = ctx.measureText(txt).width + 14, h = 17;
     ctx.fillStyle = "rgba(59,91,219,0.94)";
@@ -285,12 +287,13 @@
     ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText(txt, sx, sy);
   }
-  function drawBuildings(ctx, cam, buildings, selection, visitors, totals, hour) {
+  function drawBuildings(ctx, cam, buildings, selection, visitors, totals, hour, staffCnt) {
     for (let i = 0; i < buildings.length; i++) {
       const b = buildings[i];
       const sel = selection && selection.type === "building" && selection.index === i;
       const nv = visitors ? visitors[i] : 0;
       const tv = totals ? (totals[i] || 0) : 0;
+      const st = staffCnt ? staffCnt[i] : 0;
       // Closed right now (per opening hours)? Dim it and tag the label.
       const closed = hour != null && PS.buildingOpen && !PS.buildingOpen(b, hour);
       if (b.poly && b.poly.length >= 3) {
@@ -306,7 +309,7 @@
         ctx.fillStyle = "rgba(40,50,40,0.85)"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
         ctx.font = "600 12px system-ui, sans-serif"; ctx.fillText(b.name || "Byggnad", cs[0], cs[1] - 8);
         ctx.font = "11px system-ui, sans-serif"; ctx.fillText(closed ? "Stängt" : "BTA " + gfa.toLocaleString() + " m²", cs[0], cs[1] + 8);
-        if (nv > 0 || tv > 0) drawVisitorBadge(ctx, cs[0], cs[1] - 24, nv, tv);
+        if (nv > 0 || tv > 0 || st > 0) drawVisitorBadge(ctx, cs[0], cs[1] - 24, nv, tv, st);
         continue;
       }
       const s = PS.w2s(cam, b.x + b.w / 2, b.y + b.h / 2);
@@ -329,7 +332,7 @@
       ctx.font = "11px system-ui, sans-serif";
       ctx.fillText(closed ? "Stängt" : "BTA " + gfa.toLocaleString() + " m²", 0, 8);
       ctx.restore();
-      if (nv > 0 || tv > 0) drawVisitorBadge(ctx, s[0], s[1] - 24, nv, tv); // upright, in screen space
+      if (nv > 0 || tv > 0 || st > 0) drawVisitorBadge(ctx, s[0], s[1] - 24, nv, tv, st); // upright, in screen space
     }
   }
 
@@ -634,16 +637,19 @@
       ctx.restore();
     }
     // Live visitor counts: cars currently parked-and-visiting each building.
-    let visitors = null;
+    // Staff are tallied separately — they show up pre-opening on purpose.
+    let visitors = null, staffCnt = null;
     if (state.traffic && state.traffic.cars && state.buildings && state.buildings.length) {
       visitors = new Array(state.buildings.length).fill(0);
+      staffCnt = new Array(state.buildings.length).fill(0);
       for (const c of state.traffic.cars) {
-        if (c.state === "parked" && c.destB != null && c.destB >= 0 && c.destB < visitors.length) visitors[c.destB]++;
+        if (c.state !== "parked" || c.destB == null || c.destB < 0 || c.destB >= visitors.length) continue;
+        if (c.staff) staffCnt[c.destB]++; else visitors[c.destB]++;
       }
     }
     const visitTotals = state.traffic && state.traffic.visitTotals;
     drawBuildings(ctx, cam, state.buildings, state.selection, visitors, visitTotals,
-      state.traffic && state.traffic.hourNow ? state.traffic.hourNow() : null);
+      state.traffic && state.traffic.hourNow ? state.traffic.hourNow() : null, staffCnt);
     // Entrance markers: where each building's visitors walk in (this is the
     // point parking is drawn toward). Small door-coloured dot on the edge.
     if (state.traffic && state.traffic.net && state.traffic.net.doors) {

@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Parkeringssimulator</title>
-    <link rel="stylesheet" href="css/styles.css?v=106" />
+    <link rel="stylesheet" href="css/styles.css?v=108" />
   </head>
   <body>
     <div id="app">
@@ -135,12 +135,39 @@
                   <button data-v="road">Väg</button>
                   <button data-v="section">Sektion</button>
                   <button data-v="round">Rondell</button>
+                  <button data-v="cross" title="Klicka på en väg för att lägga ett övergångsställe">🚸 Övergång</button>
                 </div>
               </div>
-              <p class="hint">Väg / Sektion: klicka ut ankarpunkter, dubbelklick eller Enter avslutar (klicka första punkten för att stänga). Rondell: dra. Markera en yta för att dra dess ankarpunkter; dubbelklick på en kant lägger till en ny punkt. Vinkel/riktning/grönska ställs per yta under "Vald sektion". Delete tar bort markerat objekt, Esc avbryter ritning.</p>
+              <p class="hint">Väg / Sektion: klicka ut ankarpunkter, dubbelklick eller Enter avslutar (klicka första punkten för att stänga). Rondell: dra. Övergång: klicka på en väg — gående korsar där och bilarna väjer. Markera en yta för att dra dess ankarpunkter; dubbelklick på en kant lägger till en ny punkt. Vinkel/riktning/grönska ställs per yta under "Vald sektion". Delete tar bort markerat objekt, Esc avbryter ritning.</p>
               <div class="row"><button id="btn-trace" class="ghost">🗺️ Trace från kartan</button></div>
               <p class="hint" id="trace-status">I kartläge: rita en yta så hämtas verkliga byggnader och vägar därifrån (OpenStreetMap).</p>
               <div class="row"><button id="btn-clear-layout" class="ghost">Rensa layout</button></div>
+            </section>
+
+            <section>
+              <h2>Platstyper</h2>
+              <div class="field">
+                <label>♿ Handikapplatser: <span id="pt-hc-val">0</span> %</label>
+                <input type="range" id="pt-hc" min="0" max="10" step="1" value="0" />
+              </div>
+              <div class="field">
+                <label>⚡ Laddplatser (elbil): <span id="pt-ev-val">0</span> %</label>
+                <input type="range" id="pt-ev" min="0" max="30" step="1" value="0" />
+              </div>
+              <div class="field">
+                <label>👷 Personalplatser: <span id="pt-staff-val">0</span> %</label>
+                <input type="range" id="pt-staff" min="0" max="30" step="1" value="0" />
+              </div>
+              <p class="hint">Handikapplatser läggs närmast entréerna, laddplatser strax intill, personalplatser längst bort. Bara rätt förare får använda dem (~3 % har handikapptillstånd).</p>
+              <div class="field">
+                <label>Andel elbilar bland besökare: <span id="pt-evshare-val">20</span> %</label>
+                <input type="range" id="pt-evshare" min="0" max="60" step="1" value="20" />
+              </div>
+              <div class="field">
+                <label>Laddtid: <span id="pt-charge-val">45</span> min</label>
+                <input type="range" id="pt-charge" min="10" max="240" step="5" value="45" />
+                <p class="hint">Elbilar siktar på en ledig laddplats (annars vanlig plats) och står kvar tills laddningen är klar. Personal anländer före öppning och står hela arbetsdagen.</p>
+              </div>
             </section>
 
             <section id="sel-road" hidden>
@@ -395,20 +422,21 @@
               </div>
               <div class="row">
                 <button id="btn-import-json" class="ghost">Importera JSON</button>
+                <button id="btn-share" class="ghost">🔗 Dela länk</button>
               </div>
               <input type="file" id="import-file" accept="application/json,.json" hidden />
-              <p class="hint">💾 Projektet sparas automatiskt i webbläsaren och laddas när du kommer tillbaka. PNG = ögonblicksbild. JSON = spara/dela som fil (går att importera igen).</p>
+              <p class="hint">💾 Projektet sparas automatiskt i webbläsaren och laddas när du kommer tillbaka. PNG = ögonblicksbild. JSON = spara/dela som fil. Dela länk kopierar en URL med hela projektet inbakat — den som öppnar länken får en egen kopia.</p>
             </section>
           </div>
         </aside>
       </div>
     </div>
 
-    <script src="js/geometry.js?v=106"></script>
-    <script src="js/parking.js?v=106"></script>
-    <script src="js/traffic.js?v=106"></script>
-    <script src="js/render.js?v=106"></script>
-    <script src="js/report.js?v=106"></script>
-    <script src="js/app.js?v=106"></script>
+    <script src="js/geometry.js?v=108"></script>
+    <script src="js/parking.js?v=108"></script>
+    <script src="js/traffic.js?v=108"></script>
+    <script src="js/render.js?v=108"></script>
+    <script src="js/report.js?v=108"></script>
+    <script src="js/app.js?v=108"></script>
   </body>
 </html>

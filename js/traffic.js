@@ -25,6 +25,33 @@
   };
   const g = PS.geom;
 
+  // Assign stall TYPES (hc / ev / staff) from the project's percentages.
+  // Deterministic from geometry + percentages, so types are never serialized:
+  // handicap closest to the doors, EV chargers clustered just after them,
+  // staff parking farthest away. Re-run after every stall regen / net rebuild.
+  PS.assignStallTypes = function (state, net) {
+    const p = state.parking;
+    if (!p) return;
+    const cfg = state.stallTypes || {};
+    const stalls = p.stalls, N = stalls.length;
+    for (const s of stalls) s.type = undefined;
+    const nHC = Math.round(N * (cfg.hc || 0) / 100);
+    const nEV = Math.round(N * (cfg.ev || 0) / 100);
+    const nST = Math.round(N * (cfg.staff || 0) / 100);
+    p._typeCounts = { hc: nHC, ev: nEV, staff: nST };
+    if (!N || (!nHC && !nEV && !nST)) return;
+    // Order by walking distance to the nearest building door (stallAccess.dDoor);
+    // stalls without a door distance keep index order at the end.
+    const dist = stalls.map((s, k) => {
+      const sa = net && net.stallAccess && net.stallAccess[k];
+      return sa && isFinite(sa.dDoor) && sa.dDoor < 9e5 ? sa.dDoor : 1e6 + k;
+    });
+    const idx = stalls.map((_, k) => k).sort((a, b) => dist[a] - dist[b]);
+    for (let i = 0; i < nHC && i < N; i++) stalls[idx[i]].type = "hc";
+    for (let i = nHC; i < nHC + nEV && i < N; i++) stalls[idx[i]].type = "ev";
+    for (let i = 0; i < nST && N - 1 - i >= nHC + nEV; i++) stalls[idx[N - 1 - i]].type = "staff";
+  };
+
   // Vehicle + following constants (metres / seconds).
   const CAR_LEN = 4.6, CAR_W = 1.9;
   const MIN_GAP = 1.1;          // bumper gap kept when stopped
@@ -614,6 +641,8 @@
       stopHour: null,       // ...at this hour (float). null = run forever
       events: null,         // one-off spikes: [{date:"YYYY-MM-DD", from:h, to:h, mult:x, label}]
       feePerH: 0,           // parking fee (kr/h of CLOCK time) — dampens demand, earns revenue
+      evShare: 20,          // share of arriving cars that are EVs looking for a charger (%)
+      chargeMin: 45,        // charge time at an EV stall (same scale as dwellMin)
       // Driver-population traits (means in [0,1]) + how much they vary per car.
       meanAggr: 0.5, meanCaution: 0.4, traitSpread: 0.35, allowOvertake: true,
       cars: [], peds: [], net: null, selectedCar: null,
@@ -854,6 +883,7 @@
           if (k === car.stallIdx) continue;
           const s = stalls[k];
           if (!s || s.occupied || s.reserved) continue;
+          if (!stallOK(s, car)) continue; // never settle onto a typed stall the driver may not use
           cand.push({ k, d: Math.hypot(s.cx - car.x, s.cy - car.y) });
         }
       }
@@ -931,12 +961,22 @@
     }
 
     // ---- lifecycle ----
-    function freeStallList() {
+    // May THIS driver use THIS stall? Typed stalls are exclusive: only EVs at
+    // chargers, only permit holders on handicap stalls, only staff on staff
+    // stalls. Untyped stalls are open to everyone.
+    function stallOK(s, who) {
+      if (!s.type) return true;
+      if (s.type === "ev") return !!(who && who.ev);
+      if (s.type === "hc") return !!(who && who.hc);
+      if (s.type === "staff") return !!(who && who.staff);
+      return true;
+    }
+    function freeStalls(pred) {
       const stalls = state.parking.stalls;
       const out = [];
       for (let k = 0; k < stalls.length; k++) {
         const s = stalls[k];
-        if (!s.occupied && !s.reserved && sim.net.stallAccess[k]) out.push(k);
+        if (!s.occupied && !s.reserved && sim.net.stallAccess[k] && (!pred || pred(s))) out.push(k);
       }
       return out;
     }
@@ -1017,8 +1057,7 @@
     // Only stalls REACHABLE from the spawning gate (`dij`) count — otherwise a
     // disconnected section next to the door swallows the whole arrival stream
     // as "turned away" while the connected lot sits empty.
-    function chooseStall(destB, dij) {
-      const free = freeStallList();
+    function pickStall(free, destB, dij, strict) {
       if (!free.length) return -1;
       const reach = (k) => !dij || isFinite(costTo(k, dij));
       const door = destB >= 0 && sim.net.doors[destB] ? sim.net.doors[destB] : null;
@@ -1027,7 +1066,7 @@
           const k = free[Math.floor(sim.rng() * free.length)];
           if (reach(k)) return k;
         }
-        return free[Math.floor(sim.rng() * free.length)];
+        return strict ? -1 : free[Math.floor(sim.rng() * free.length)];
       }
       const stalls = state.parking.stalls;
       const scored = free.map((k) => {
@@ -1040,8 +1079,18 @@
       for (const sc of scored) {
         if (reach(sc.k)) { ok.push(sc); if (ok.length >= 10) break; }
       }
-      if (!ok.length) return scored[0].k; // nothing reachable — caller turns the car away
+      if (!ok.length) return strict ? -1 : scored[0].k; // nothing reachable — caller turns the car away
       return ok[Math.floor(sim.rng() * ok.length)].k;
+    }
+    // Preferred type first (an EV heads for a free charger, a permit holder for
+    // a handicap stall), then fall back to anything the driver may use.
+    function chooseStall(destB, dij, who) {
+      const pref = who && (who.staff ? "staff" : who.ev ? "ev" : who.hc ? "hc" : null);
+      if (pref) {
+        const k = pickStall(freeStalls((s) => s.type === pref), destB, dij, true);
+        if (k >= 0) return k;
+      }
+      return pickStall(freeStalls((s) => stallOK(s, who)), destB, dij, false);
     }
     function gateBlocked(gnode) {
       const eN = sim.net.nodes[gnode];
@@ -1078,31 +1127,67 @@
       return field;
     }
     // Can gate m serve an arrival for destB right now? Returns the spawn plan.
-    function planFromGate(m, destB) {
+    function planFromGate(m, destB, who) {
       const dij = arrivalField(m);
-      const stallIdx = chooseStall(destB, dij);
+      const stallIdx = chooseStall(destB, dij, who);
       if (stallIdx < 0) return null;                     // lot genuinely full
       if (!isFinite(costTo(stallIdx, dij))) return null; // no free stall reachable from m
       const path = pathToStall(stallIdx, dij, sim.net.entrances[m]);
       if (!path || !path.length) return null;
       return { stallIdx, path };
     }
+    // Driver type for a fresh visitor: EVs by the evShare slider, handicap
+    // permits a fixed ~3% of the population.
+    function rollWho() {
+      if (sim.rng() < (sim.evShare != null ? sim.evShare : 20) / 100) return { ev: true };
+      if (sim.rng() < 0.03) return { hc: true };
+      return null;
+    }
     function spawnCarAt(k) {
       const ent = sim.net.entrances;
       const destB = chooseDestBuilding();
-      let m = k, plan = planFromGate(k, destB);
+      const who = rollWho();
+      let m = k, plan = planFromGate(k, destB, who);
       if (!plan) {
         // This gate can't reach any free stall — the driver arrives via
         // another gate that can. Only when NO gate reaches a free stall is
         // the arrival a genuine turn-away (what the analyst assumes it means).
-        for (let j = 0; j < ent.length && !plan; j++) if (j !== k) { plan = planFromGate(j, destB); if (plan) m = j; }
+        for (let j = 0; j < ent.length && !plan; j++) if (j !== k) { plan = planFromGate(j, destB, who); if (plan) m = j; }
         if (!plan) { sim.turnedAway++; return true; }
       }
       if (gateBlocked(ent[m])) return false; // the chosen gate's mouth is occupied — wait
       if (!sim.entCount || sim.entCount.length !== ent.length) sim.entCount = new Array(ent.length).fill(0);
       sim.entCount[m]++;
       state.parking.stalls[plan.stallIdx].reserved = true;
-      const car = { kind: "car", state: "toStall", stallIdx: plan.stallIdx, path: plan.path, segIndex: 0, segT: 0, v: 0, color: carColor(), spawnT: sim.t, traits: makeTraits(), stuck: 0, gateIn: m, destB };
+      const car = { kind: "car", state: "toStall", stallIdx: plan.stallIdx, path: plan.path, segIndex: 0, segT: 0, v: 0, color: carColor(), spawnT: sim.t, traits: makeTraits(), stuck: 0, gateIn: m, destB, ev: !!(who && who.ev), hc: !!(who && who.hc) };
+      setPose(car);
+      sim.cars.push(car);
+      return true;
+    }
+    // ---- staff (personalparkering) --------------------------------------
+    // Staff head for a building that will open, weighted by size — openness at
+    // arrival must NOT gate this (the whole point is arriving before opening).
+    function chooseStaffDest() {
+      const b = state.buildings;
+      if (!b.length) return -1;
+      let tot = 0;
+      const w = b.map((x) => { const a = x.closed ? 0 : footprint(x) * (x.floors || 1); tot += a; return a; });
+      if (tot <= 0) return -1;
+      let r = sim.rng() * tot;
+      for (let i = 0; i < b.length; i++) { r -= w[i]; if (r <= 0) return i; }
+      return b.length - 1;
+    }
+    function spawnStaff() {
+      const ent = sim.net.entrances;
+      if (!ent.length) return false;
+      const destB = chooseStaffDest();
+      const who = { staff: true };
+      let m = Math.floor(sim.rng() * ent.length), plan = planFromGate(m, destB, who);
+      for (let j = 0; j < ent.length && !plan; j++) if (j !== m) { plan = planFromGate(j, destB, who); if (plan) m = j; }
+      if (!plan) return true; // nothing reachable — consume the slot instead of retrying forever
+      if (gateBlocked(ent[m])) return false;
+      state.parking.stalls[plan.stallIdx].reserved = true;
+      const car = { kind: "car", state: "toStall", stallIdx: plan.stallIdx, path: plan.path, segIndex: 0, segT: 0, v: 0, color: carColor(), spawnT: sim.t, traits: makeTraits(), stuck: 0, gateIn: m, destB, staff: true };
       setPose(car);
       sim.cars.push(car);
       return true;
@@ -1121,10 +1206,42 @@
       }
       return true;
     }
+    // Route walkers via marked crossings: when a leg cuts across a drawn road
+    // and a crossing sits within 30 m of the cut, walk via the crossing instead
+    // of jaywalking. This is what channels foot traffic onto the zebras.
+    function addCrossings(from, wps) {
+      const crs = state.crossings || [];
+      if (!crs.length) return wps;
+      const roads = state.roads || [];
+      if (!roads.length) return wps;
+      const out = [];
+      let prev = from, inserted = 0;
+      for (const wp of wps) {
+        if (inserted < 4) {
+          let best = null;
+          for (const r of roads) for (let k = 0; k < r.length - 1; k++) {
+            if (!g.segIntersect(prev, wp, r[k], r[k + 1])) continue;
+            const ip = g.lineIntersect(prev, wp, r[k], r[k + 1]);
+            if (!ip) continue;
+            for (const cr of crs) {
+              const d = Math.hypot(cr.x - ip[0], cr.y - ip[1]);
+              if (d < 30 && (!best || d < best.d)) best = { d, cr };
+            }
+          }
+          if (best && Math.hypot(best.cr.x - prev[0], best.cr.y - prev[1]) > 1.5) {
+            out.push([best.cr.x, best.cr.y]);
+            inserted++;
+          }
+        }
+        out.push(wp);
+        prev = wp;
+      }
+      return out;
+    }
     function pedRoute(from, to) {
-      if (pedSegClear(from, to)) return [to];
+      if (pedSegClear(from, to)) return addCrossings(from, [to]);
       const net = sim.net;
-      if (!net || !net.nodes.length) return [to];
+      if (!net || !net.nodes.length) return addCrossings(from, [to]);
       if (!net._pedAdj) {
         const ua = net.nodes.map(() => []);
         for (const e of net.edges) { ua[e.a].push({ to: e.b, len: e.len }); ua[e.b].push({ to: e.a, len: e.len }); }
@@ -1138,7 +1255,7 @@
         if (ds < sd) { sd = ds; src = nd.id; }
         if (de < dd) { dd = de; dst = nd.id; }
       }
-      if (src < 0 || dst < 0) return [to];
+      if (src < 0 || dst < 0) return addCrossings(from, [to]);
       const n = net.nodes.length, dist = new Array(n).fill(Infinity), prev = new Array(n).fill(-1), done = new Array(n).fill(false);
       dist[src] = 0;
       for (let it = 0; it < n; it++) {
@@ -1146,13 +1263,13 @@
         if (u < 0 || u === dst) break; done[u] = true;
         for (const e of ua[u]) { const nd2 = dist[u] + e.len; if (nd2 < dist[e.to]) { dist[e.to] = nd2; prev[e.to] = u; } }
       }
-      if (!isFinite(dist[dst])) return [to];
+      if (!isFinite(dist[dst])) return addCrossings(from, [to]);
       const ids = []; let u = dst; while (u !== -1) { ids.push(u); u = prev[u]; } ids.reverse();
       const wps = ids.map((id) => [net.nodes[id].x, net.nodes[id].y]);
       wps.push(to);
       // Trim leading waypoints the walker can already reach directly (less zig-zag).
       while (wps.length > 1 && pedSegClear(from, wps[1])) wps.shift();
-      return wps;
+      return addCrossings(from, wps); // crossings AFTER trimming, or the trim could skip a zebra detour
     }
     function parkCar(car) {
       const s = state.parking.stalls[car.stallIdx];
@@ -1160,10 +1277,24 @@
       s.occupied = true; s.color = car.color;
       car.state = "parked";
       car._parkedAt = sim.t; // paid-time start (revenue on departure)
+      if (car.staff) {
+        // Staff stay the whole workday: leave at the destination's closing time
+        // (clock-based), or after ~9 h if it never closes. No shopping walker,
+        // and they don't count as "besök" in the KPIs.
+        const b2 = (car.destB != null && car.destB >= 0) ? state.buildings[car.destB] : null;
+        let stayH = 8.5 + sim.rng();
+        if (b2 && b2.openTo != null && b2.openFrom !== b2.openTo) stayH = (((b2.openTo - sim.hourNow()) % 24) + 24) % 24 + 0.1 + 0.3 * sim.rng();
+        if (stayH > 16) stayH = 10;
+        car.departAt = sim.t + stayH * 60; // 1 clock-hour = 60 sim-s
+        return;
+      }
       const search = sim.t - car.spawnT;
       sim.recentSearch.push(search);
       if (sim.recentSearch.length > 40) sim.recentSearch.shift();
       sim.parkedTotal++;
+      // An EV on a charger stays plugged in at least its charge time — the
+      // walker may come back earlier, but the car waits for the battery.
+      if (car.ev && s.type === "ev") car._chargeUntil = sim.t + (sim.chargeMin != null ? sim.chargeMin : 45) * 60 * (0.7 + 0.6 * sim.rng());
       // Count this visit toward the destination building's running total.
       if (car.destB != null && car.destB >= 0) {
         if (!sim.visitTotals) sim.visitTotals = {};
@@ -1191,8 +1322,9 @@
         car.departAt = sim.t + 60;
         return;
       }
-      // Parking revenue: paid time in CLOCK hours = sim-seconds / 60.
-      if (sim.feePerH > 0 && car._parkedAt != null) sim.revenue = (sim.revenue || 0) + ((sim.t - car._parkedAt) / 60) * sim.feePerH;
+      // Parking revenue: paid time in CLOCK hours = sim-seconds / 60. Staff
+      // park free (personalparkering).
+      if (sim.feePerH > 0 && car._parkedAt != null && !car.staff) sim.revenue = (sim.revenue || 0) + ((sim.t - car._parkedAt) / 60) * sim.feePerH;
       // Free the painted spot as it pulls out, but HOLD the claim until the
       // car has cleared the stall mouth (released in the drive loop) — an
       // arrival must not nose into a stall that still has a car in it.
@@ -1209,7 +1341,7 @@
       { // clock rolled past midnight -> next calendar day
         const hNow = sim.hourNow();
         const hPrev = ((((sim.clockStart || 0) + (sim.t - dt) / 60) % 24) + 24) % 24;
-        if (hNow < hPrev - 12) advanceDate(1);
+        if (hNow < hPrev - 12) { advanceDate(1); sim._staffToday = 0; sim._staffAcc = 0; } // new day → new staff shift
         // Stop time reached -> flag for the UI loop to pause (lets you run
         // e.g. exactly one month and then read/export the curves).
         if (sim.stopDate && (sim.dateStr > sim.stopDate || (sim.dateStr === sim.stopDate && hNow >= (sim.stopHour || 0)))) {
@@ -1267,6 +1399,28 @@
             }
           }
         }
+        // Staff arrivals: employees trickle in during the 90 clock-minutes
+        // before the earliest opening and fill the staff stalls for the day.
+        const staffN = (state.parking && state.parking._typeCounts) ? state.parking._typeCounts.staff : 0;
+        if (staffN > 0 && (sim._staffToday || 0) < staffN) {
+          let minOpen = null;
+          for (const b of state.buildings) {
+            if (b.closed) continue;
+            if (b.openFrom != null && b.openTo != null && b.openFrom !== b.openTo) minOpen = minOpen == null ? b.openFrom : Math.min(minOpen, b.openFrom);
+          }
+          if (minOpen == null) minOpen = 8; // no opening hours anywhere — assume a workday from 08
+          const winStart = ((minOpen - 1.5) % 24 + 24) % 24;
+          const inWin = winStart < minOpen ? (hArr >= winStart && hArr < minOpen) : (hArr >= winStart || hArr < minOpen);
+          if (inWin) {
+            // 1.3x over-provision: tokens lost to a momentarily blocked gate
+            // must not leave staff stalls unfilled (capped by staffN anyway).
+            sim._staffAcc = (sim._staffAcc || 0) + (staffN / 90) * 1.3 * dt;
+            while (sim._staffAcc >= 1 && (sim._staffToday || 0) < staffN) {
+              sim._staffAcc -= 1;
+              if (spawnStaff()) sim._staffToday = (sim._staffToday || 0) + 1;
+            }
+          }
+        }
       }
 
       // Departures — on the dwell timer, or early because the destination
@@ -1275,7 +1429,9 @@
       const hDep = sim.hourNow();
       for (const car of sim.cars) {
         if (car.state !== "parked") continue;
-        const closedDest = isFinite(car.departAt) && car.destB >= 0 && state.buildings[car.destB] &&
+        // Staff are exempt from the closed-building eviction — they arrive
+        // BEFORE opening by design; their departAt is already the closing time.
+        const closedDest = isFinite(car.departAt) && !car.staff && car.destB >= 0 && state.buildings[car.destB] &&
           PS.buildingOpen && !PS.buildingOpen(state.buildings[car.destB], hDep);
         if (sim.t >= car.departAt || closedDest) startLeaving(car);
       }
@@ -1335,6 +1491,19 @@
 
       const vm = vmax();
       const walkers = sim.peds.filter((p) => p.phase !== "inBuilding");
+      // Which marked crossings have a pedestrian on/at them right now? Computed
+      // once per tick; cars brake for ACTIVE crossings ahead (zebra priority).
+      const crossings = state.crossings || [];
+      let crossActive = null;
+      if (crossings.length && walkers.length) {
+        crossActive = new Array(crossings.length).fill(false);
+        for (let ci = 0; ci < crossings.length; ci++) {
+          const cr = crossings[ci];
+          for (const p of walkers) {
+            if (Math.abs(p.x - cr.x) < 4 && Math.abs(p.y - cr.y) < 4) { crossActive[ci] = true; break; }
+          }
+        }
+      }
       for (const car of sim.cars) {
         if (car.state !== "toStall" && car.state !== "toExit") continue;
         // Departer has cleared its stall mouth → release the claim held since
@@ -1462,6 +1631,17 @@
           if (ahead > 0 && ahead < 7 && Math.abs(-rx * hy + ry * hx) < 2.2) {
             if ((car.crawl || 0) > 5) move = Math.min(move, Math.max(1.4 * dt, ahead - 2.6));
             else move = Math.min(move, Math.max(0, ahead - 2.6));
+          }
+        }
+        // Zebra crossings: hold well short of an ACTIVE crossing ahead — the
+        // pedestrian has priority there, so no squeeze-past like above.
+        if (crossActive) {
+          for (let ci = 0; ci < crossings.length; ci++) {
+            if (!crossActive[ci]) continue;
+            const cr = crossings[ci];
+            const rx = cr.x - car.x, ry = cr.y - car.y;
+            const ahead = rx * hx + ry * hy;
+            if (ahead > 0.5 && ahead < 14 && Math.abs(-rx * hy + ry * hx) < 4.5) move = Math.min(move, Math.max(0, ahead - 3.2));
           }
         }
 
@@ -1636,7 +1816,13 @@
             if (destClosed) ped.phase = "toStall"; // locked door — turn straight back
             else { ped.phase = "inBuilding"; ped.shopUntil = sim.t + dwellSeconds() * 0.6 * dwellFactorFor(ped.car.destB); }
           }
-          else { ped._done = true; startLeaving(ped.car); }
+          else {
+            ped._done = true;
+            // Back at the car but the EV is still charging — wait it out (the
+            // departure timer picks it up when the battery is done).
+            if (ped.car._chargeUntil && sim.t < ped.car._chargeUntil) ped.car.departAt = ped.car._chargeUntil;
+            else startLeaving(ped.car);
+          }
         } else { ped.x += (dx / d) * stepd; ped.y += (dy / d) * stepd; }
       }
       if (sim.peds.some((p) => p._done)) sim.peds = sim.peds.filter((p) => !p._done);
@@ -1646,6 +1832,13 @@
       if (sim._confTick % 4 === 0) {
         for (const ped of sim.peds) {
           if (ped.phase === "inBuilding") continue;
+          // A pedestrian ON a marked crossing is a controlled interaction, not a
+          // conflict — painting a zebra where the heatmap glows removes the glow.
+          let atCross = false;
+          for (const cr of crossings) {
+            if (Math.abs(ped.x - cr.x) < 6 && Math.abs(ped.y - cr.y) < 6) { atCross = true; break; }
+          }
+          if (atCross) continue;
           for (const car of sim.cars) {
             if (car.state !== "toStall" && car.state !== "toExit") continue;
             if (Math.abs(ped.x - car.x) < 5 && Math.abs(ped.y - car.y) < 5) {
@@ -1726,6 +1919,7 @@
     sim.step = step;
     sim.rebuild = function () {
       sim.net = PS.buildNetwork(state);
+      if (PS.assignStallTypes) PS.assignStallTypes(state, sim.net); // stalls were regenerated — retype them
       sim.entCount = null; sim._gateAcc = null; // reset per-entrance arrival streams for the new network
       sim.visitTotals = {};
       sim.cars = [];
@@ -1767,7 +1961,7 @@
       sim._confPeriod = new Map();
       sim._periodStart = { d: sim.dateStr, h: sim.hourNow ? sim.hourNow() : 8 };
       if (state.parking) for (const s of state.parking.stalls) s.reserved = false;
-      sim.peds = []; sim.conflict.clear(); sim._crashPts = []; sim.entCount = null; sim._gateAcc = null; sim._gateWait = null; sim.visitTotals = {}; sim.reroutes = 0; sim.settles = 0; sim.diverted = 0; sim.revenue = 0;
+      sim.peds = []; sim.conflict.clear(); sim._crashPts = []; sim.entCount = null; sim._gateAcc = null; sim._gateWait = null; sim.visitTotals = {}; sim.reroutes = 0; sim.settles = 0; sim.diverted = 0; sim.revenue = 0; sim._staffToday = 0; sim._staffAcc = 0;
     };
     // Force a car to stall/crash: it stops and blocks its lane for a while.
     sim.crash = function (car) {

@@ -100,10 +100,12 @@
     map: null,
     _pin: null,
     layoutMode: "manual", // manual-only: you draw roads / sections / roundabouts
-    tool: "select",       // tools: 'select' | 'road' | 'section' | 'round' | 'bldg'
+    tool: "select",       // tools: 'select' | 'road' | 'section' | 'round' | 'cross' | 'bldg'
     roads: [],
     sections: [],
     roundabouts: [],
+    crossings: [],        // marked pedestrian crossings snapped onto roads: {x, y, dx, dy}
+    stallTypes: { ev: 0, hc: 0, staff: 0 }, // share of stalls per type (%)
     _draft: null,
   };
   state.decor = buildDecor(state.site);
@@ -138,7 +140,7 @@
         drag.type === "resizerect" || drag.type === "rotrect" || drag.type === "section");
       if (dragging) regen._netStale = true;
       else if (state.traffic.running) state.traffic.rebuild();
-      else state.traffic.net = PS.buildNetwork(state);
+      else { state.traffic.net = PS.buildNetwork(state); PS.assignStallTypes(state, state.traffic.net); }
     }
     updateMetrics();
     scheduleSave();
@@ -516,6 +518,29 @@
     }
     return -1;
   }
+  // Nearest point on any drawn road within maxD — a crossing must sit ON a road.
+  // Returns the snapped point + the road's unit direction there (stripe axis).
+  function snapToRoad(w, maxD) {
+    let best = null;
+    for (const r of state.roads) {
+      for (let k = 0; k < r.length - 1; k++) {
+        const p = projOnSeg(w, r[k], r[k + 1]);
+        const d = Math.hypot(w[0] - p[0], w[1] - p[1]);
+        if (!best || d < best.d) {
+          const vx = r[k + 1][0] - r[k][0], vy = r[k + 1][1] - r[k][1], L = Math.hypot(vx, vy) || 1;
+          best = { d, x: p[0], y: p[1], dx: vx / L, dy: vy / L };
+        }
+      }
+    }
+    return best && best.d <= maxD ? best : null;
+  }
+  function crossAt(w) {
+    for (let i = (state.crossings || []).length - 1; i >= 0; i--) {
+      const cr = state.crossings[i];
+      if (Math.hypot(cr.x - w[0], cr.y - w[1]) < 4.5) return i;
+    }
+    return -1;
+  }
   function roundHandleAt(scr) {
     if (!state.selection || state.selection.type !== "round") return null;
     const rb = state.roundabouts[state.selection.index];
@@ -554,6 +579,13 @@
         pts.push([w[0], w[1]]); requestDraw(); return;
       }
       if (state.tool === "round") { state._draft = { type: "round", center: w, r: 0 }; drag = { type: "drawround" }; return; }
+      if (state.tool === "cross") {
+        // One click = one crossing, snapped onto the nearest road. Stay in the
+        // tool so several can be placed; Esc / Markör exits.
+        const sn = snapToRoad(w, 20);
+        if (sn) { state.crossings.push({ x: sn.x, y: sn.y, dx: sn.dx, dy: sn.dy }); scheduleSave(); requestDraw(); }
+        return;
+      }
     }
     // Edit handles of the current selection (resize/rotate a rect, move a road
     // vertex, or a roundabout centre/radius) — checked before re-selecting.
@@ -583,6 +615,13 @@
 
     // Select/move sections, roads or roundabouts (manual, select tool).
     if (state.layoutMode === "manual" && state.tool === "select") {
+      // Crossings first — they always sit ON a road/section and would lose the hit.
+      const xi = crossAt(w);
+      if (xi >= 0) {
+        state.selection = { type: "cross", index: xi };
+        drag = { type: "cross", index: xi };
+        syncSelectionUI(); requestDraw(); return;
+      }
       const si = sectionAt(w);
       if (si >= 0) {
         state.selection = { type: "section", index: si };
@@ -675,6 +714,10 @@
       }
     } else if (drag.type === "roadvertex") {
       state.roads[drag.road][drag.vi] = [w[0], w[1]]; requestDraw();
+    } else if (drag.type === "cross") {
+      // Crossings slide along the roads — re-snap while dragging.
+      const sn = snapToRoad(w, 40);
+      if (sn) { const cr = state.crossings[drag.index]; cr.x = sn.x; cr.y = sn.y; cr.dx = sn.dx; cr.dy = sn.dy; requestDraw(); }
     } else if (drag.type === "roundcenter") {
       const rb = state.roundabouts[drag.index]; rb.x = w[0]; rb.y = w[1]; requestDraw();
     } else if (drag.type === "roundradius") {
@@ -697,6 +740,7 @@
   window.addEventListener("mouseup", () => {
     if (drag && drag.type === "pan") canvas.classList.remove("dragging");
     if (drag && (drag.type === "gate" || drag.type === "roadvertex" || drag.type === "roundcenter" || drag.type === "roundradius")) rebuildNet();
+    if (drag && drag.type === "cross") scheduleSave(); // no net rebuild needed — crossings live outside the drive graph
     if (regen._netStale) { regen._netStale = false; rebuildNet(); } // deferred while dragging (see regen)
     if (drag && drag.type === "drawround") {
       const d = state._draft;
@@ -795,6 +839,12 @@
       state.selection = null;
       syncSelectionUI();
       rebuildNet();
+    } else if (state.selection.type === "cross") {
+      state.crossings.splice(state.selection.index, 1);
+      state.selection = null;
+      syncSelectionUI();
+      requestDraw();
+      scheduleSave();
     }
   }
 
@@ -802,7 +852,7 @@
   function rebuildNet() {
     if (!state.traffic) return;
     if (state.traffic.running) state.traffic.rebuild();
-    else state.traffic.net = PS.buildNetwork(state);
+    else { state.traffic.net = PS.buildNetwork(state); PS.assignStallTypes(state, state.traffic.net); }
     requestDraw();
     scheduleSave();
   }
@@ -919,7 +969,7 @@
     const selS = sel && sel.type === "section";
     // deleteSelected handles roads/roundabouts too — the button must match,
     // or a selected road looks undeletable (Delete-key only, undocumented).
-    const canDel = sel && ["building", "gate", "section", "road", "round"].includes(sel.type);
+    const canDel = sel && ["building", "gate", "section", "road", "round", "cross"].includes(sel.type);
     document.getElementById("btn-del").disabled = !canDel;
     document.getElementById("bname-field").hidden = !selB;
     document.getElementById("floors-field").hidden = !selB;
@@ -1241,7 +1291,7 @@
   document.getElementById("sec-rot").addEventListener("input", (e) => updateSelSection("rot", parseFloat(e.target.value)));
   document.getElementById("sec-island").addEventListener("input", (e) => updateSelSection("island", parseInt(e.target.value, 10)));
   armButton("btn-clear-layout", "Säker? Klicka igen", () => {
-    state.roads = []; state.sections = []; state.roundabouts = []; state.buildings = []; state.gates = []; retailCount = 0;
+    state.roads = []; state.sections = []; state.roundabouts = []; state.buildings = []; state.gates = []; state.crossings = []; retailCount = 0;
     state._draft = null; state.selection = null;
     syncSelectionUI(); regen(); rebuildNet(); requestDraw();
   });
@@ -1422,6 +1472,19 @@
 
   // ---- parking fee ----------------------------------------------------------
   rangeBind("fee", "fee-val", (v) => { sim.feePerH = v; scheduleSave(); });
+
+  // ---- stall types (hc / ev / staff) ---------------------------------------
+  function retypeStalls() {
+    if (state.traffic && state.traffic.net && PS.assignStallTypes) PS.assignStallTypes(state, state.traffic.net);
+  }
+  function bindTypePct(id, key) {
+    rangeBind(id, id + "-val", (v) => { state.stallTypes[key] = v; retypeStalls(); requestDraw(); scheduleSave(); });
+  }
+  bindTypePct("pt-hc", "hc");
+  bindTypePct("pt-ev", "ev");
+  bindTypePct("pt-staff", "staff");
+  rangeBind("pt-evshare", "pt-evshare-val", (v) => { sim.evShare = v; scheduleSave(); });
+  rangeBind("pt-charge", "pt-charge-val", (v) => { sim.chargeMin = v; scheduleSave(); });
 
   // ---- calendar: weekday / month multipliers (paintable) + date + payday ---
   const WD_NAMES = ["mån", "tis", "ons", "tor", "fre", "lör", "sön"];
@@ -1951,6 +2014,11 @@
     }
     lines.push("Räknare: " + (sim.parkedTotal || 0) + " parkerade besök, " + (sim.turnedAway || 0) + " avvisade, " + (sim.gaveUp || 0) + " gav upp, " + (sim.collisions || 0) + " krockar, " + (sim.reroutes || 0) + " omplaneringar, " + (sim.settles || 0) + " platsbyten i kö." +
       (sim.feePerH > 0 ? " Avgift " + sim.feePerH + " kr/h, intäkt " + Math.round(sim.revenue || 0) + " kr." : ""));
+    const tc = state.parking && state.parking._typeCounts;
+    if (tc && (tc.ev || tc.hc || tc.staff)) {
+      lines.push("Platstyper: " + tc.hc + " handikapplatser, " + tc.ev + " laddplatser (elbilsandel i trafiken " + (sim.evShare != null ? sim.evShare : 20) + "%), " + tc.staff + " personalplatser (av " + stalls.length + " totalt).");
+    }
+    if ((state.crossings || []).length) lines.push("Övergångsställen: " + state.crossings.length + " st — gående korsar vägarna där, och bilar väjer.");
     const q = topCells(sim._queueGrid, 8, 5);
     if (q.length) lines.push("Största köområdena (tid ackumulerad): " + q.map((c) => "vid " + nearestLandmark(c.x, c.y) + " [" + Math.round(c.v / 60) + " min]").join("; ") + ".");
     const cf = topCells(sim._confPeriod, 4, 5);
@@ -2227,12 +2295,14 @@
       layoutMode: "manual", params: state.params, occupancyFrac: state.occupancyFrac,
       roads: (state.roads || []).map((r) => ({ pts: r.map((p) => [p[0], p[1]]), lanes: r.lanes || "1+1", speed: r.speed || null })),
       sections: state.sections, roundabouts: state.roundabouts,
+      crossings: state.crossings || [], stallTypes: state.stallTypes || null,
       traffic: {
         arrivalRate: sim.arrivalRate, dwellMin: sim.dwellMin, speedKmh: sim.speedKmh, followSec: sim.followSec, tempo: sim.tempo,
         arrivalCurve: sim.arrivalCurve || null, clock: sim.hourNow ? +sim.hourNow().toFixed(2) : 8,
         dateStr: sim.dateStr || null, weekMult: sim.weekMult || null, monthMult: sim.monthMult || null,
         domMult: sim.domMult || null, stopDate: sim.stopDate || null, stopHour: sim.stopHour,
         events: sim.events || null, feePerH: sim.feePerH || 0, lastRun: sim.lastRun || null,
+        evShare: sim.evShare != null ? sim.evShare : 20, chargeMin: sim.chargeMin != null ? sim.chargeMin : 45,
         meanAggr: sim.meanAggr, meanCaution: sim.meanCaution, traitSpread: sim.traitSpread, allowOvertake: sim.allowOvertake,
       },
       map: (state.mapMode && state.map && state._anchor) ? {
@@ -2309,7 +2379,11 @@
     pauseTraffic();
     if (state.mapMode) setBasemap("styled");
     state.site = defaultSite();
-    state.buildings = []; state.gates = []; state.roads = []; state.sections = []; state.roundabouts = [];
+    state.buildings = []; state.gates = []; state.roads = []; state.sections = []; state.roundabouts = []; state.crossings = [];
+    state.stallTypes = { ev: 0, hc: 0, staff: 0 };
+    setSlider("pt-hc", "pt-hc-val", 0); setSlider("pt-ev", "pt-ev-val", 0); setSlider("pt-staff", "pt-staff-val", 0);
+    sim.evShare = 20; sim.chargeMin = 45;
+    setSlider("pt-evshare", "pt-evshare-val", 20); setSlider("pt-charge", "pt-charge-val", 45);
     state.layoutMode = "manual"; state.tool = "select"; state._draft = null; state.selection = null;
     state._report = null; retailCount = 0; state.occupancyFrac = 0.4;
     sim.arrivalCurve = defaultCurve(40); sim.clockStart = ((8 - sim.t / 60) % 24 + 24) % 24; // fresh day profile per new project
@@ -2393,6 +2467,69 @@
     const blob = new Blob([JSON.stringify(serializeProject(), null, 2)], { type: "application/json" });
     download("parkering-" + currentName() + ".json", URL.createObjectURL(blob), true);
   });
+  // ---- share link: the whole project deflate-compressed into the URL hash ---
+  function bufToB64url(buf) {
+    const bytes = new Uint8Array(buf);
+    let s = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+  function b64urlToBytes(b64) {
+    const s = atob(b64.replace(/-/g, "+").replace(/_/g, "/"));
+    const bytes = new Uint8Array(s.length);
+    for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i);
+    return bytes;
+  }
+  async function shareLink() {
+    try {
+      const json = JSON.stringify(serializeProject());
+      const stream = new Blob([json]).stream().pipeThrough(new CompressionStream("deflate-raw"));
+      const buf = await new Response(stream).arrayBuffer();
+      const url = location.origin + location.pathname + "#p=" + bufToB64url(buf);
+      let copied = false;
+      try { await navigator.clipboard.writeText(url); copied = true; } catch (e) {}
+      if (!copied) { // clipboard API blocked (permissions/https) — legacy fallback
+        const ta = document.createElement("textarea");
+        ta.value = url; document.body.appendChild(ta); ta.select();
+        try { copied = document.execCommand("copy"); } catch (e) {}
+        ta.remove();
+      }
+      console.log("[share] " + url.length + " tecken");
+      const kb = Math.round(url.length / 102.4) / 10;
+      setStatus(copied ? "🔗 Länk kopierad (" + kb + " kB)" : "Kunde inte kopiera länken", copied);
+    } catch (err) {
+      console.error("[share]", err);
+      setStatus("Kunde inte skapa länken", false);
+    }
+  }
+  { const bS = document.getElementById("btn-share"); if (bS) bS.addEventListener("click", shareLink); }
+  // Opening a share link imports the payload as a NEW project (never touches
+  // the receiver's existing ones). The blob is persisted directly — saveProject
+  // would no-op while a map restore holds loadingProject.
+  async function importFromHash() {
+    const m = /^#p=([A-Za-z0-9_-]+)$/.exec(location.hash || "");
+    if (!m) return;
+    history.replaceState(null, "", location.pathname + location.search); // consume the hash either way
+    try {
+      const stream = new Blob([b64urlToBytes(m[1])]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+      const json = await new Response(stream).text();
+      const plan = JSON.parse(json);
+      if (!plan || plan.app !== "parkeringssimulator") throw new Error("okänt format");
+      const r = loadReg(), id = newId();
+      const name = "Delat projekt " + (r.items.filter((x) => /^Delat projekt/.test(x.name)).length + 1);
+      r.items.push({ id, name, updated: Date.now() });
+      r.current = id; saveReg(r);
+      undoClear();
+      localStorage.setItem(projKey(id), json);
+      applyPlan(plan);
+      lastSnap = json;
+      refreshProjectSelect();
+      setStatus("🔗 Delat projekt importerat", true);
+    } catch (err) {
+      console.error("[share-import]", err);
+      setStatus("Kunde inte läsa delningslänken", false);
+    }
+  }
   const importFile = document.getElementById("import-file");
   document.getElementById("btn-import-json").addEventListener("click", () => importFile.click());
   importFile.addEventListener("change", (e) => {
@@ -2432,6 +2569,11 @@
     });
     state.sections = arr(p.sections);
     state.roundabouts = arr(p.roundabouts);
+    state.crossings = arr(p.crossings);
+    state.stallTypes = Object.assign({ ev: 0, hc: 0, staff: 0 }, p.stallTypes || {});
+    setSlider("pt-hc", "pt-hc-val", state.stallTypes.hc);
+    setSlider("pt-ev", "pt-ev-val", state.stallTypes.ev);
+    setSlider("pt-staff", "pt-staff-val", state.stallTypes.staff);
     state.layoutMode = "manual";
     if (p.params) Object.assign(state.params, p.params);
     if (typeof p.occupancyFrac === "number") state.occupancyFrac = p.occupancyFrac;
@@ -2451,6 +2593,10 @@
     sim.feePerH = t.feePerH != null ? t.feePerH : 0;
     sim.revenue = 0;
     sim.lastRun = t.lastRun || null; // UNCONDITIONAL — pauseTraffic during load must not leak the old project's run
+    sim.evShare = t.evShare != null ? t.evShare : 20;
+    sim.chargeMin = t.chargeMin != null ? t.chargeMin : 45;
+    setSlider("pt-evshare", "pt-evshare-val", sim.evShare);
+    setSlider("pt-charge", "pt-charge-val", sim.chargeMin);
     setSlider("fee", "fee-val", sim.feePerH);
     renderEvents();
     hvCompare = null; const hvSel = document.getElementById("hv-compare"); if (hvSel) hvSel.value = "";
@@ -2608,4 +2754,5 @@
     else { loadBlank(); saveProject(); }
     refreshProjectSelect();
   })();
+  importFromHash(); // a #p=… share link imports as a new project on top of the normal boot
 })();

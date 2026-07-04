@@ -171,6 +171,64 @@
     return corners.map((p) => [p[0] + (cx - p[0]) * f, p[1] + (cy - p[1]) * f]);
   }
 
+  // Typed stalls (hc / ev / staff): tinted floor + a symbol when zoomed in.
+  // Only the few percent of stalls that carry a type are touched — cheap.
+  const TYPE_FILL = { hc: "rgba(37,99,235,0.30)", ev: "rgba(46,160,67,0.28)", staff: "rgba(110,115,125,0.30)" };
+  const TYPE_INK = { hc: "#1d4ed8", ev: "#2b8a3e", staff: "#4b5563" };
+  const TYPE_SYM = { hc: "♿", ev: "⚡", staff: "P" };
+  function drawStallTypes(ctx, cam, stalls) {
+    const zoomed = cam.scale > 2.2;
+    ctx.save();
+    for (const s of stalls) {
+      if (!s.type) continue;
+      polyPath(ctx, cam, insetPoly(s.corners, 0.1));
+      ctx.fillStyle = TYPE_FILL[s.type] || "rgba(0,0,0,0.1)";
+      ctx.fill();
+      if (zoomed && !s.occupied) {
+        const c = PS.w2s(cam, s.cx, s.cy);
+        ctx.font = "700 " + Math.max(8, 1.7 * cam.scale) + "px system-ui, sans-serif";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillStyle = TYPE_INK[s.type] || "#333";
+        ctx.fillText(TYPE_SYM[s.type] || "?", c[0], c[1]);
+      }
+    }
+    ctx.restore();
+  }
+
+  // Marked pedestrian crossings: zebra stripes across the road. (dx,dy) is the
+  // road direction at the crossing; stripes run ALONG the road, repeated across.
+  PS.drawCrossings = function (ctx, cam, state) {
+    const crs = state.crossings || [];
+    if (!crs.length) return;
+    const sel = state.selection;
+    ctx.save();
+    for (let i = 0; i < crs.length; i++) {
+      const cr = crs[i];
+      const dx = cr.dx != null ? cr.dx : 1, dy = cr.dy != null ? cr.dy : 0;
+      const px = -dy, py = dx; // across the road
+      const bandT = 3.0;       // walking-corridor thickness along the road (m)
+      const halfW = 4.6;       // half covered road width (m)
+      const sw = 0.6, gap = 0.55;
+      ctx.fillStyle = "rgba(255,255,255,0.92)";
+      for (let o = -halfW + sw / 2; o <= halfW - sw / 2; o += sw + gap) {
+        const cx2 = cr.x + px * o, cy2 = cr.y + py * o;
+        const ax = dx * (bandT / 2), ay = dy * (bandT / 2);
+        const bx = px * (sw / 2), by = py * (sw / 2);
+        const p1 = PS.w2s(cam, cx2 - ax - bx, cy2 - ay - by);
+        const p2 = PS.w2s(cam, cx2 + ax - bx, cy2 + ay - by);
+        const p3 = PS.w2s(cam, cx2 + ax + bx, cy2 + ay + by);
+        const p4 = PS.w2s(cam, cx2 - ax + bx, cy2 - ay + by);
+        ctx.beginPath(); ctx.moveTo(p1[0], p1[1]); ctx.lineTo(p2[0], p2[1]); ctx.lineTo(p3[0], p3[1]); ctx.lineTo(p4[0], p4[1]); ctx.closePath(); ctx.fill();
+      }
+      if (sel && sel.type === "cross" && sel.index === i) {
+        const s = PS.w2s(cam, cr.x, cr.y);
+        ctx.strokeStyle = "#3b5bdb"; ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.arc(s[0], s[1], Math.max(12, (halfW + 1.2) * cam.scale), 0, Math.PI * 2); ctx.stroke();
+      }
+    }
+    ctx.restore();
+  };
+
   function drawCars(ctx, cam, stalls) {
     for (const s of stalls) {
       if (!s.occupied) continue;
@@ -288,6 +346,7 @@
         for (const p of item.poly) hsq(ctx, PS.w2s(cam, p[0], p[1]));
         return;
       }
+      if (!item) return; // stale selection index (item just removed) — no handles
       let cx, cy, w, h, rot;
       if (sel.type === "building") { const b = state.buildings[sel.index]; cx = b.x + b.w / 2; cy = b.y + b.h / 2; w = b.w; h = b.h; rot = b.rot || 0; }
       else { const s = state.sections[sel.index]; cx = s.cx; cy = s.cy; w = s.w; h = s.h; rot = s.rot || 0; }
@@ -557,6 +616,7 @@
     const manual = state.layoutMode === "manual";
     if (manual) drawManualBase(ctx, cam, state, state.mapMode ? 0.55 : 1);
     else drawSiteAsphalt(ctx, cam, state.site, state.mapMode ? 0.5 : 1);
+    if (PS.drawCrossings) PS.drawCrossings(ctx, cam, state); // zebras sit on the roads, under the cars
     if (state.parking) {
       // Clip lot content to the parcel (auto) so aisle dashes / overlays never
       // bleed onto the surroundings. In manual mode content is already confined.
@@ -564,6 +624,7 @@
       if (!manual) { polyPath(ctx, cam, state.site); ctx.clip(); }
       drawAisles(ctx, cam, state.parking.aisles);
       drawStalls(ctx, cam, state.parking.stalls);
+      drawStallTypes(ctx, cam, state.parking.stalls);
       if (state.traffic && PS.drawTrafficHeat) PS.drawTrafficHeat(ctx, cam, state);
       drawCars(ctx, cam, state.parking.stalls);
       drawTrees(ctx, cam, state.parking.trees);

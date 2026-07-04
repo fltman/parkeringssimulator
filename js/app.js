@@ -383,8 +383,13 @@
         setBase(kind);
         state.map.setView(m.center, m.zoom, { animate: false });
       } else {
-        state._pin = g.centroid(state.site);
-        state._anchor = state.map.getCenter(); // pin the lot centroid to the current map centre
+        // No pending restore: keep an existing anchor — a second queued call
+        // (e.g. two rapid project loads) must not re-pin the world to whatever
+        // the map happens to show. Only a FIRST map activation pins the site.
+        if (!state._anchor) {
+          state._pin = g.centroid(state.site);
+          state._anchor = state.map.getCenter(); // pin the lot centroid to the current map centre
+        }
         setBase(kind);
       }
       state.mapMode = true;
@@ -1033,9 +1038,13 @@
       lastTs = ts;
       // Accumulate fractional sim-time across frames — otherwise at high frame
       // rates one frame's slice can be < dt and the sim would never step.
-      simAcc = Math.min(simAcc + real * sim.tempo, 4);
+      // At high tempo the step itself grows (capped at 0.6 s so a car can
+      // never jump past a junction approach zone) — that's what makes day-
+      // and month-runs tractable now that the clock runs in real seconds.
+      const dtEff = Math.min(0.6, Math.max(sim.dt, sim.dt * sim.tempo / 60));
+      simAcc = Math.min(simAcc + real * sim.tempo, dtEff * 400);
       let guard = 0;
-      while (simAcc >= sim.dt && guard < 200) { sim.step(sim.dt); simAcc -= sim.dt; guard++; }
+      while (simAcc >= dtEff && guard < 400) { sim.step(dtEff); simAcc -= dtEff; guard++; }
       if (state.follow && sim.selectedCar) centerOnCar(sim.selectedCar);
       if (sim._stopReached) {
         sim._stopReached = false;
@@ -1125,7 +1134,8 @@
     document.getElementById("t-circ").textContent = s.circulating;
     document.getElementById("t-park").textContent = s.parked;
     document.getElementById("t-queue").textContent = s.queuing;
-    document.getElementById("t-search").textContent = Math.round(s.avgSearch) + " s";
+    { const sec = Math.round(s.avgSearch);
+      document.getElementById("t-search").textContent = sec >= 120 ? Math.round(sec / 60) + " min" : sec + " s"; }
     document.getElementById("t-coll").textContent = s.collisions || 0;
     document.getElementById("t-away").textContent = s.turnedAway || 0;
     { const tr2 = document.getElementById("t-rev"); if (tr2) tr2.textContent = Math.round(sim.revenue || 0).toLocaleString(); }
@@ -1401,7 +1411,7 @@
   const clockEl = document.getElementById("clock");
   if (clockEl) clockEl.addEventListener("input", () => {
     const h = parseFloat(clockEl.value) || 0;
-    sim.clockStart = ((h - sim.t / 60) % 24 + 24) % 24; // so hourNow() === h right now
+    sim.clockStart = ((h - sim.t / 3600) % 24 + 24) % 24; // so hourNow() === h right now
     updateClockUI(); drawArrCurve(); scheduleSave();
   });
 
@@ -1592,7 +1602,7 @@
     const m = /^(\d{1,2}):(\d{2})$/.exec(timeEl.value || "");
     if (!m) return;
     const h = Math.min(23.99, (+m[1]) + (+m[2]) / 60);
-    sim.clockStart = ((h - sim.t / 60) % 24 + 24) % 24; // so hourNow() === h right now
+    sim.clockStart = ((h - sim.t / 3600) % 24 + 24) % 24; // so hourNow() === h right now
     updateClockUI(); drawArrCurve(); updateCalUI(); scheduleSave();
   });
 
@@ -2111,7 +2121,16 @@
   rangeBind("dwell", "dwell-val", (v) => { sim.dwellMin = v; });
   rangeBind("speed", "speed-val", (v) => { sim.speedKmh = v; });
   rangeBind("follow", "follow-val", (v) => { sim.followSec = v; });
-  rangeBind("tempo", "tempo-val", (v) => { sim.tempo = v; });
+  // Tempo is a LOG slider (1x-3600x): slider 0-100 -> 3600^(v/100), so both
+  // watching individual cars (1-20x) and running whole months (3600x) fit.
+  const tempoFromSlider = (v) => Math.max(1, Math.round(Math.pow(3600, v / 100)));
+  const sliderFromTempo = (t) => Math.round(Math.log(Math.max(1, t)) / Math.log(3600) * 100);
+  function setTempoUI(t) {
+    const el = document.getElementById("tempo"), val = document.getElementById("tempo-val");
+    if (el) { el.value = sliderFromTempo(t); val.textContent = Math.round(t); }
+  }
+  { const el = document.getElementById("tempo"), val = document.getElementById("tempo-val");
+    el.addEventListener("input", () => { sim.tempo = tempoFromSlider(parseFloat(el.value)); val.textContent = sim.tempo; }); }
   rangeBind("aggr", "aggr-val", (v) => { sim.meanAggr = v / 100; });
   rangeBind("caut", "caut-val", (v) => { sim.meanCaution = v / 100; });
   rangeBind("spread", "spread-val", (v) => { sim.traitSpread = v / 100; });
@@ -2386,7 +2405,7 @@
     setSlider("pt-evshare", "pt-evshare-val", 20); setSlider("pt-charge", "pt-charge-val", 45);
     state.layoutMode = "manual"; state.tool = "select"; state._draft = null; state.selection = null;
     state._report = null; retailCount = 0; state.occupancyFrac = 0.4;
-    sim.arrivalCurve = defaultCurve(40); sim.clockStart = ((8 - sim.t / 60) % 24 + 24) % 24; // fresh day profile per new project
+    sim.arrivalCurve = defaultCurve(40); sim.clockStart = ((8 - sim.t / 3600) % 24 + 24) % 24; // fresh day profile per new project
     sim.weekMult = defaultWeek(); sim.monthMult = defaultMonth(); sim.domMult = defaultDom();
     sim.stopDate = null; sim.stopHour = null; updateStopUI();
     sim.events = null; sim.feePerH = 0; sim.revenue = 0; sim.lastRun = null;
@@ -2580,7 +2599,7 @@
     const t = p.traffic || {};
     if (t.arrivalRate != null) sim.arrivalRate = t.arrivalRate;
     sim.arrivalCurve = (Array.isArray(t.arrivalCurve) && t.arrivalCurve.length === 24) ? t.arrivalCurve.slice() : defaultCurve(sim.arrivalRate);
-    { const ch = t.clock != null ? t.clock : 8; sim.clockStart = ((ch - sim.t / 60) % 24 + 24) % 24; }
+    { const ch = t.clock != null ? t.clock : 8; sim.clockStart = ((ch - sim.t / 3600) % 24 + 24) % 24; }
     sim.weekMult = (Array.isArray(t.weekMult) && t.weekMult.length === 7) ? t.weekMult.slice() : defaultWeek();
     sim.monthMult = (Array.isArray(t.monthMult) && t.monthMult.length === 12) ? t.monthMult.slice() : defaultMonth();
     if (Array.isArray(t.domMult) && t.domMult.length === 31) sim.domMult = t.domMult.slice();
@@ -2617,7 +2636,7 @@
     setSlider("dwell", "dwell-val", sim.dwellMin);
     setSlider("speed", "speed-val", sim.speedKmh);
     setSlider("follow", "follow-val", sim.followSec);
-    setSlider("tempo", "tempo-val", sim.tempo);
+    setTempoUI(sim.tempo);
     setSlider("aggr", "aggr-val", Math.round(sim.meanAggr * 100));
     setSlider("caut", "caut-val", Math.round(sim.meanCaution * 100));
     setSlider("spread", "spread-val", Math.round(sim.traitSpread * 100));

@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Parkeringssimulator</title>
-    <link rel="stylesheet" href="css/styles.css?v=108" />
+    <link rel="stylesheet" href="css/styles.css?v=110" />
   </head>
   <body>
     <div id="app">
@@ -322,7 +322,8 @@
               </div>
               <div class="field">
                 <label>Tempo: <span id="tempo-val">20</span>×</label>
-                <input type="range" id="tempo" min="1" max="120" step="1" value="20" />
+                <input type="range" id="tempo" min="0" max="100" step="1" value="37" />
+                <p class="hint">Logaritmiskt 1×–3600×. Vid max går ett dygn på under en minut och en månad på en kvart–halvtimme (CPU-begränsat).</p>
               </div>
               <div class="row">
                 <button id="btn-traffic" class="primary">▶ Starta trafik</button>
@@ -432,11 +433,11 @@
       </div>
     </div>
 
-    <script src="js/geometry.js?v=108"></script>
-    <script src="js/parking.js?v=108"></script>
-    <script src="js/traffic.js?v=108"></script>
-    <script src="js/render.js?v=108"></script>
-    <script src="js/report.js?v=108"></script>
-    <script src="js/app.js?v=108"></script>
+    <script src="js/geometry.js?v=110"></script>
+    <script src="js/parking.js?v=110"></script>
+    <script src="js/traffic.js?v=110"></script>
+    <script src="js/render.js?v=110"></script>
+    <script src="js/report.js?v=110"></script>
+    <script src="js/app.js?v=110"></script>
   </body>
 </html>

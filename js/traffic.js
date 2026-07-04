@@ -631,7 +631,7 @@
       t: 0, dt: 0.15, tempo: 20,
       seed: 1337, rng: mulberry32(1337),
       arrivalRate: 40, dwellMin: 20, speedKmh: 15, followSec: 1.5,
-      clockStart: 8,        // time of day (hours) at sim.t = 0 — 1 sim-second = 1 clock-minute
+      clockStart: 8,        // time of day (hours) at sim.t = 0 — 1 sim-second = 1 clock-second (real time)
       arrivalCurve: null,   // 24 hourly arrival rates (cars/min); null = flat arrivalRate
       dateStr: null,        // current sim date "YYYY-MM-DD" (null = app sets today); advances at midnight
       weekMult: null,       // 7 weekday multipliers, Monday first (null = app default)
@@ -987,9 +987,10 @@
     }
     // Pick a destination building, weighted by floor area (bigger = busier).
     // ---- time of day ---------------------------------------------------
-    // 1 sim-second = 1 clock-minute: a full day passes in 24 sim-minutes,
-    // which is watchable at high tempo and slow enough to see rush hours.
-    sim.hourNow = () => (((sim.clockStart || 0) + sim.t / 60) % 24 + 24) % 24;
+    // 1 sim-second = 1 clock-second: real time, so the header clock keeps
+    // clock and drive-time consistent (a 500 m drive takes ~2 clock-minutes);
+    // days and months are covered by the log tempo slider (up to 3600x).
+    sim.hourNow = () => (((sim.clockStart || 0) + sim.t / 3600) % 24 + 24) % 24;
     // Arrival rate at hour h — linear blend between the curve's hourly buckets.
     function curveAt(h) {
       const c = sim.arrivalCurve;
@@ -1015,14 +1016,13 @@
       const d = sim.dateNow(); d.setDate(d.getDate() + days);
       sim.dateStr = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
     }
-    // The clock hour a car spawning NOW is likely to ARRIVE at: with the
-    // compressed clock (1 sim-s = 1 clock-min) the drive itself takes
-    // clock-hours, so plans must be made against arrival-time openness —
-    // not spawn-time. Lead = the fleet's recent spawn->parked time.
+    // The clock hour a car spawning NOW is likely to ARRIVE at — plans are
+    // made against arrival-time openness, not spawn-time (matters right
+    // around opening/closing). Lead = the fleet's recent spawn->parked time.
     function estArrivalHour() {
       const rs = sim.recentSearch;
-      const lead = g.clamp(rs && rs.length ? rs.reduce((a2, b2) => a2 + b2, 0) / rs.length : 60, 20, 240);
-      return (sim.hourNow() + lead / 60) % 24;
+      const lead = g.clamp(rs && rs.length ? rs.reduce((a2, b2) => a2 + b2, 0) / rs.length : 120, 30, 1800);
+      return (sim.hourNow() + lead / 3600) % 24;
     }
     function chooseDestBuilding() {
       const b = state.buildings;
@@ -1285,7 +1285,7 @@
         let stayH = 8.5 + sim.rng();
         if (b2 && b2.openTo != null && b2.openFrom !== b2.openTo) stayH = (((b2.openTo - sim.hourNow()) % 24) + 24) % 24 + 0.1 + 0.3 * sim.rng();
         if (stayH > 16) stayH = 10;
-        car.departAt = sim.t + stayH * 60; // 1 clock-hour = 60 sim-s
+        car.departAt = sim.t + stayH * 3600;
         return;
       }
       const search = sim.t - car.spawnT;
@@ -1322,9 +1322,9 @@
         car.departAt = sim.t + 60;
         return;
       }
-      // Parking revenue: paid time in CLOCK hours = sim-seconds / 60. Staff
+      // Parking revenue: paid time in hours = sim-seconds / 3600. Staff
       // park free (personalparkering).
-      if (sim.feePerH > 0 && car._parkedAt != null && !car.staff) sim.revenue = (sim.revenue || 0) + ((sim.t - car._parkedAt) / 60) * sim.feePerH;
+      if (sim.feePerH > 0 && car._parkedAt != null && !car.staff) sim.revenue = (sim.revenue || 0) + ((sim.t - car._parkedAt) / 3600) * sim.feePerH;
       // Free the painted spot as it pulls out, but HOLD the claim until the
       // car has cleared the stall mouth (released in the drive loop) — an
       // arrival must not nose into a stall that still has a car in it.
@@ -1340,7 +1340,7 @@
       sim.t += dt;
       { // clock rolled past midnight -> next calendar day
         const hNow = sim.hourNow();
-        const hPrev = ((((sim.clockStart || 0) + (sim.t - dt) / 60) % 24) + 24) % 24;
+        const hPrev = ((((sim.clockStart || 0) + (sim.t - dt) / 3600) % 24) + 24) % 24;
         if (hNow < hPrev - 12) { advanceDate(1); sim._staffToday = 0; sim._staffAcc = 0; } // new day → new staff shift
         // Stop time reached -> flag for the UI loop to pause (lets you run
         // e.g. exactly one month and then read/export the curves).
@@ -1414,7 +1414,8 @@
           if (inWin) {
             // 1.3x over-provision: tokens lost to a momentarily blocked gate
             // must not leave staff stalls unfilled (capped by staffN anyway).
-            sim._staffAcc = (sim._staffAcc || 0) + (staffN / 90) * 1.3 * dt;
+            // Window = 90 clock-minutes = 5400 s.
+            sim._staffAcc = (sim._staffAcc || 0) + (staffN / 5400) * 1.3 * dt;
             while (sim._staffAcc >= 1 && (sim._staffToday || 0) < staffN) {
               sim._staffAcc -= 1;
               if (spawnStaff()) sim._staffToday = (sim._staffToday || 0) + 1;
@@ -1886,14 +1887,17 @@
         if (car.state === "parked") parked++;
         else if (car.state === "toStall" || car.state === "toExit") { circ++; if (car.v < 0.4 || (car.crawl || 0) > 3) queue++; }
       }
-      // Rolling history for the time-series chart (sampled, bounded).
+      // Rolling history for the time-series chart (sampled, bounded). The
+      // interval starts at 20 s; when the buffer fills (24 h) it is thinned
+      // and the interval doubled, so a month-long run keeps its WHOLE period
+      // at ~2200-4400 points instead of shifting away its beginning.
       if (!sim.history) sim.history = [];
-      if (sim.t - (sim._histT != null ? sim._histT : -1e9) >= 20) {
+      if (!sim._histDt) sim._histDt = 20;
+      if (sim.t - (sim._histT != null ? sim._histT : -1e9) >= sim._histDt) {
         sim._histT = sim.t;
         sim.history.push({ t: sim.t, h: sim.hourNow(), d: sim.dateStr, c: circ, p: parked, q: queue });
-        if (sim.history.length > 4320) sim.history.shift(); // 24 h at 20 s sampling
         // Stall utilization for the period heatmap: occupied-time per stall.
-        for (const st of state.parking.stalls) if (st.occupied) st._occT = (st._occT || 0) + 20;
+        for (const st of state.parking.stalls) if (st.occupied) st._occT = (st._occT || 0) + sim._histDt;
         // Queue hotspots: accumulate WHERE queued cars sit (8 m grid cells) so
         // the period heatmap can show the spots where queues actually form.
         if (!sim._queueGrid) sim._queueGrid = new Map();
@@ -1901,8 +1905,12 @@
           if (car.state !== "toStall" && car.state !== "toExit") continue;
           if (car.v < 0.4 || (car.crawl || 0) > 3) {
             const key = Math.round(car.x / 8) + "," + Math.round(car.y / 8);
-            sim._queueGrid.set(key, (sim._queueGrid.get(key) || 0) + 20);
+            sim._queueGrid.set(key, (sim._queueGrid.get(key) || 0) + sim._histDt);
           }
+        }
+        if (sim.history.length > 4320) {
+          sim.history = sim.history.filter((_, i) => i % 2 === 0);
+          sim._histDt *= 2;
         }
       }
       const total = state.parking.stalls.length || 1;
@@ -1954,7 +1962,7 @@
       // Clear the cars too — reseeding only the peds orphaned ped-driven
       // parked cars (their departAt stayed pinned at Infinity forever).
       sim.cars = []; sim.selectedCar = null;
-      sim.history = []; sim._histT = null;
+      sim.history = []; sim._histT = null; sim._histDt = 20;
       if (state.parking) for (const st of state.parking.stalls) st._occT = 0;
       if (sim.net) for (const e of sim.net.edges) e._congSum = 0;
       sim._queueGrid = new Map();

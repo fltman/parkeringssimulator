@@ -744,6 +744,66 @@
       return true;
     }
 
+    // A queued driver SETTLES: gives up the assigned (door-close) stall and
+    // takes a free one nearby instead — real drivers grab what's available
+    // rather than idle in a conga line past open spots. Finds free stalls
+    // around the car via the spatial grid, then routes to the cheapest one
+    // reachable from the junction the car is heading to.
+    function settleForNearbyStall(car) {
+      const net = sim.net, li = car._li;
+      if (!li || li.laneKey == null || li.endNode == null || li.endNode < 0) return false;
+      if (!sim._stallGrid || !state.parking) return false;
+      const stalls = state.parking.stalls;
+      const cand = [];
+      const cx = Math.floor(car.x / 6), cy = Math.floor(car.y / 6), R = 10; // ~60 m radius (gate queues sit on the access road, a bit from the stalls)
+      for (let gx = cx - R; gx <= cx + R; gx++) for (let gy = cy - R; gy <= cy + R; gy++) {
+        const cell = sim._stallGrid.get(gx + "," + gy);
+        if (!cell) continue;
+        for (const k of cell) {
+          if (k === car.stallIdx) continue;
+          const s = stalls[k];
+          if (!s || s.occupied || s.reserved) continue;
+          cand.push({ k, d: Math.hypot(s.cx - car.x, s.cy - car.y) });
+        }
+      }
+      if (!cand.length) return false; // nothing free nearby — keep queueing
+      cand.sort((a, b) => a.d - b.d);
+      const dij = dijkstraCong(li.endNode);
+      // Among the nearest handful, take the cheapest actually-reachable one.
+      let best = null, bestCost = Infinity;
+      for (const c of cand.slice(0, 12)) {
+        const sa = net.stallAccess[c.k];
+        if (!sa) continue;
+        const ap = approachFor(net, sa, dij.dist);
+        if (!ap || !isFinite(dij.dist[ap.nd.node])) continue;
+        const cost = dij.dist[ap.nd.node] + Math.abs(ap.nd.along - sa.along);
+        if (cost < bestCost) { bestCost = cost; best = { k: c.k, sa, ap }; }
+      }
+      if (!best) return false;
+      // Euclidean-near but a long drive away (other side of a divider) is not
+      // "settling". NOTE: the cost is congestion-WEIGHTED (jammed metres count
+      // up to 7x), and settling happens precisely when everything nearby is
+      // jammed — so the cap must leave room for that inflation.
+      if (bestCost > 400) return false;
+      const ids = reconstruct(dij.prev, best.ap.nd.node);
+      if (ids[0] !== li.endNode) return false;
+      const segs = nodesToSegments(net, ids);
+      segs.push(alongSeg(net, best.sa, best.ap));
+      const s = stalls[best.k];
+      segs.push({ x1: best.sa.access[0], y1: best.sa.access[1], x2: s.cx, y2: s.cy, len: Math.hypot(s.cx - best.sa.access[0], s.cy - best.sa.access[1]), laneKey: null, edgeId: -1, startNode: -1, endNode: null });
+      const tail = segs.filter((sg) => sg.len > 0.01);
+      if (!tail.length) return false;
+      // Swap the reservation and splice the new route, like reroute().
+      const old = stalls[car.stallIdx];
+      if (old) old.reserved = false;
+      s.reserved = true;
+      car.stallIdx = best.k;
+      car.path = [car.path[car.segIndex]].concat(tail);
+      car.segIndex = 0;
+      setPose(car);
+      return true;
+    }
+
     // ---- car helpers ----
     function setPose(car) {
       const seg = car.path[car.segIndex];
@@ -1186,6 +1246,14 @@
         // Dynamic stress: builds while crawling/stopped, eases when rolling.
         if (car.v < 0.6) { tr.stress = Math.min(1, tr.stress + dt * (0.02 + 0.05 * tr.stressProne)); car.stuck = (car.stuck || 0) + dt; }
         else { tr.stress = Math.max(0, tr.stress - dt * 0.05); car.stuck = 0; }
+        // Crawl-impatience: a queue rarely stands fully still — a conga line
+        // rolls at half cruising speed, which never trips the stuck-timer (it
+        // resets at 0.6 m/s). Count time spent below 60% of cruise instead,
+        // with hysteresis: it only starts recovering above 75% of cruise, so
+        // stop-and-go queues keep accruing.
+        const v0 = sim.speedKmh / 3.6;
+        if (car.v < 0.6 * v0) car.crawl = (car.crawl || 0) + dt;
+        else if (car.v > 0.75 * v0) car.crawl = Math.max(0, (car.crawl || 0) - dt * 2);
 
         // Re-planning as a PROACTIVE driver decision: react to congestion on the
         // road AHEAD (current + next edge), independent of the car's own speed —
@@ -1211,6 +1279,22 @@
             (sim.t - (car._reroutedAt || -1e9)) > rerouteCooldown) {
           car._reroutedAt = sim.t; sim._lastRerouteWall = performance.now(); sim._rerouteAttempts = (sim._rerouteAttempts || 0) + 1;
           if (reroute(car)) { car.stuck = 0; car._didReroute = true; sim.reroutes = (sim.reroutes || 0) + 1; }
+        }
+
+        // Settling: a driver crawling in queue toward its assigned stall gives
+        // up on it and takes a free stall nearby instead — nobody inches past
+        // open spots for minutes to park by the door. Triggered on crawl-time
+        // (see above), with patience scaled by personality: stressed and
+        // aggressive drivers settle after ~6 s of crawling, calm ones hold out
+        // ~18 s. Same wall-clock Dijkstra throttle as reroute.
+        if (!car.crashed && car.state === "toStall" &&
+            (car._settleCount || 0) < 3 && // settle once or twice like a real driver — not a stall-hopping loop
+            (car.crawl || 0) > 6 + 12 * (1 - Math.max(tr.stress || 0, tr.aggr || 0)) &&
+            (sim.t - (car._settledAt || -1e9)) > 6 &&
+            (performance.now() - (sim._lastSettleWall || -1e9) >= 100)) {
+          sim._lastSettleWall = performance.now();
+          car._settledAt = sim.t; // mark the attempt either way — don't rescan every frame for a car with nothing free nearby
+          if (settleForNearbyStall(car)) { car.stuck = 0; car.crawl = 0; car._settleCount = (car._settleCount || 0) + 1; sim.settles = (sim.settles || 0) + 1; }
         }
 
         // Frustration: stuck far too long → give up and vanish (self-heals any

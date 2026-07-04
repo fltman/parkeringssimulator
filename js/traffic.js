@@ -550,8 +550,9 @@
       dateStr: null,        // current sim date "YYYY-MM-DD" (null = app sets today); advances at midnight
       weekMult: null,       // 7 weekday multipliers, Monday first (null = app default)
       monthMult: null,      // 12 month multipliers, January first (null = app default)
-      payday: 25,           // day of month with a spending spike...
-      paydayMult: 2,        // ...and how hard it hits (x)
+      domMult: null,        // 31 day-of-month multipliers (payday bump etc.; null = app default)
+      stopDate: null,       // "YYYY-MM-DD" — sim pauses itself when reached...
+      stopHour: null,       // ...at this hour (float). null = run forever
       // Driver-population traits (means in [0,1]) + how much they vary per car.
       meanAggr: 0.5, meanCaution: 0.4, traitSpread: 0.35, allowOvertake: true,
       cars: [], peds: [], net: null, selectedCar: null,
@@ -905,7 +906,8 @@
       const wi = (d.getDay() + 6) % 7;
       const w = (sim.weekMult && sim.weekMult.length === 7) ? sim.weekMult[wi] : 1;
       const m = (sim.monthMult && sim.monthMult.length === 12) ? sim.monthMult[d.getMonth()] : 1;
-      const p = (sim.payday && d.getDate() === sim.payday) ? (sim.paydayMult || 1) : 1;
+      const dm = sim.domMult;
+      const p = (dm && dm.length === 31 && dm[d.getDate() - 1] != null) ? dm[d.getDate() - 1] : 1;
       return { w, m, p, total: w * m * p, weekday: wi, month: d.getMonth(), dom: d.getDate() };
     };
     function advanceDate(days) {
@@ -1134,6 +1136,11 @@
         const hNow = sim.hourNow();
         const hPrev = ((((sim.clockStart || 0) + (sim.t - dt) / 60) % 24) + 24) % 24;
         if (hNow < hPrev - 12) advanceDate(1);
+        // Stop time reached -> flag for the UI loop to pause (lets you run
+        // e.g. exactly one month and then read/export the curves).
+        if (sim.stopDate && (sim.dateStr > sim.stopDate || (sim.dateStr === sim.stopDate && hNow >= (sim.stopHour || 0)))) {
+          sim.running = false; sim._stopReached = true;
+        }
       }
 
       // Clear finished crashes (the wreck is towed away).
@@ -1570,6 +1577,7 @@
         const inst = a ? Math.max(0, 1 - a.sumV / a.n / vm) : 0;
         e.load = a ? a.n : 0;
         e.cong = e.cong * 0.88 + inst * 0.12;
+        e._congSum = (e._congSum || 0) + e.cong * dt; // time-integrated, for the period heatmap (avg = _congSum / sim.t)
         if (e.cong > maxC) maxC = e.cong;
         if (e.load > 0 && e.cong > worstC) { worstC = e.cong; worst = e.id; }
       }
@@ -1584,8 +1592,20 @@
       if (!sim.history) sim.history = [];
       if (sim.t - (sim._histT != null ? sim._histT : -1e9) >= 20) {
         sim._histT = sim.t;
-        sim.history.push({ t: sim.t, h: sim.hourNow(), c: circ, p: parked, q: queue });
+        sim.history.push({ t: sim.t, h: sim.hourNow(), d: sim.dateStr, c: circ, p: parked, q: queue });
         if (sim.history.length > 4320) sim.history.shift(); // 24 h at 20 s sampling
+        // Stall utilization for the period heatmap: occupied-time per stall.
+        for (const st of state.parking.stalls) if (st.occupied) st._occT = (st._occT || 0) + 20;
+        // Queue hotspots: accumulate WHERE queued cars sit (8 m grid cells) so
+        // the period heatmap can show the spots where queues actually form.
+        if (!sim._queueGrid) sim._queueGrid = new Map();
+        for (const car of sim.cars) {
+          if (car.state !== "toStall" && car.state !== "toExit") continue;
+          if (car.v < 0.4 || (car.crawl || 0) > 3) {
+            const key = Math.round(car.x / 8) + "," + Math.round(car.y / 8);
+            sim._queueGrid.set(key, (sim._queueGrid.get(key) || 0) + 20);
+          }
+        }
       }
       const total = state.parking.stalls.length || 1;
       sim.stats = {
@@ -1636,6 +1656,10 @@
       // parked cars (their departAt stayed pinned at Infinity forever).
       sim.cars = []; sim.selectedCar = null;
       sim.history = []; sim._histT = null;
+      if (state.parking) for (const st of state.parking.stalls) st._occT = 0;
+      if (sim.net) for (const e of sim.net.edges) e._congSum = 0;
+      sim._queueGrid = new Map();
+      sim._periodStart = { d: sim.dateStr, h: sim.hourNow ? sim.hourNow() : 8 };
       if (state.parking) for (const s of state.parking.stalls) s.reserved = false;
       sim.peds = []; sim.conflict.clear(); sim._crashPts = []; sim.entCount = null; sim._gateAcc = null; sim._gateWait = null; sim.visitTotals = {}; sim.reroutes = 0; sim.settles = 0; sim.diverted = 0;
     };

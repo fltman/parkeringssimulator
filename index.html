@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Parkeringssimulator</title>
-    <link rel="stylesheet" href="css/styles.css?v=89" />
+    <link rel="stylesheet" href="css/styles.css?v=94" />
   </head>
   <body>
     <div id="app">
@@ -37,6 +37,9 @@
             <div class="hv-head">
               <h3>Historik</h3>
               <span class="hv-info" id="hv-info"></span>
+              <button id="hv-png" class="ghost">PNG</button>
+              <button id="hv-csv" class="ghost">CSV</button>
+              <button id="hv-heat" class="ghost">Heatmap</button>
               <button id="hv-close" class="ghost">✕ Stäng</button>
             </div>
             <div class="hv-legend">
@@ -58,6 +61,7 @@
             <div class="pb-row">
               <select id="project-select" title="Byt projekt"></select>
               <button id="btn-new-project" class="ghost" title="Nytt projekt">＋</button>
+              <button id="btn-dup-project" class="ghost" title="Duplicera projektet — skapa en variant att experimentera med">⧉</button>
               <button id="btn-del-project" class="ghost" title="Ta bort detta projekt">🗑</button>
             </div>
             <div class="pb-row" id="del-confirm" hidden>
@@ -189,8 +193,11 @@
                 <p class="hint">Dra i kurvan för att forma dygnets ankomster. Reglaget flyttar klockan; linjen visar var på dygnet simuleringen är.</p>
               </div>
               <div class="field">
-                <label>Datum: <span id="date-label">–</span> · kalenderfaktor ×<span id="cal-mult">1.0</span></label>
-                <input type="date" id="sim-date" />
+                <label>Datum &amp; tid: <span id="date-label">–</span> · kalenderfaktor ×<span id="cal-mult">1.0</span></label>
+                <div class="row">
+                  <input type="date" id="sim-date" />
+                  <input type="time" id="sim-time" step="300" />
+                </div>
               </div>
               <div class="field">
                 <label>Veckodag (mån–sön): ×<span id="week-x">1.0</span> idag</label>
@@ -202,9 +209,23 @@
                 <p class="hint">Dra i staplarna: t.ex. måndag ×0.5, fredag ×1.5, december julhandel, januari fattigast. Skala 0–3×.</p>
               </div>
               <div class="field">
-                <label>Lönedag: <span id="payday-val">25</span>:e · ×<span id="payday-x-val">2.0</span></label>
-                <input type="range" id="payday" min="1" max="31" step="1" value="25" />
-                <input type="range" id="payday-x" min="1" max="5" step="0.1" value="2" />
+                <label>Kör till (stopptid): <span id="stop-label">–</span></label>
+                <div class="row">
+                  <input type="date" id="stop-date" />
+                  <input type="time" id="stop-time" step="300" />
+                </div>
+                <div class="row">
+                  <button id="stop-day" class="ghost">+1 dygn</button>
+                  <button id="stop-week" class="ghost">+1 vecka</button>
+                  <button id="stop-month" class="ghost">+1 mån</button>
+                  <button id="stop-clear" class="ghost">Rensa</button>
+                </div>
+                <p class="hint">Simuleringen pausar sig själv vid stopptiden — kör t.ex. en hel månad i ett svep och exportera kurvorna. Tomt = kör tills vidare.</p>
+              </div>
+              <div class="field">
+                <label>Dag i månaden (1–31): ×<span id="dom-x">1.0</span> idag</label>
+                <canvas id="dom-curve" style="width:100%;height:44px;display:block;background:#f6f7fb;border:1px solid #dfe3ea;border-radius:6px;cursor:crosshair;touch-action:none"></canvas>
+                <p class="hint">T.ex. lön den 25:e ×2–3, tomt i plånboken dagarna före. Skala 0–3×.</p>
               </div>
               <div class="field">
                 <label>Uppehåll: <span id="dwell-val">20</span> min</label>
@@ -220,7 +241,7 @@
               </div>
               <div class="field">
                 <label>Tempo: <span id="tempo-val">20</span>×</label>
-                <input type="range" id="tempo" min="1" max="60" step="1" value="20" />
+                <input type="range" id="tempo" min="1" max="120" step="1" value="20" />
               </div>
               <div class="row">
                 <button id="btn-traffic" class="primary">▶ Starta trafik</button>
@@ -328,11 +349,11 @@
       </div>
     </div>
 
-    <script src="js/geometry.js?v=89"></script>
-    <script src="js/parking.js?v=89"></script>
-    <script src="js/traffic.js?v=89"></script>
-    <script src="js/render.js?v=89"></script>
-    <script src="js/report.js?v=89"></script>
-    <script src="js/app.js?v=89"></script>
+    <script src="js/geometry.js?v=94"></script>
+    <script src="js/parking.js?v=94"></script>
+    <script src="js/traffic.js?v=94"></script>
+    <script src="js/render.js?v=94"></script>
+    <script src="js/report.js?v=94"></script>
+    <script src="js/app.js?v=94"></script>
   </body>
 </html>

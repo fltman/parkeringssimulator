@@ -960,6 +960,12 @@
       let guard = 0;
       while (simAcc >= sim.dt && guard < 200) { sim.step(sim.dt); simAcc -= sim.dt; guard++; }
       if (state.follow && sim.selectedCar) centerOnCar(sim.selectedCar);
+      if (sim._stopReached) {
+        sim._stopReached = false;
+        pauseTraffic();
+        const hint = document.getElementById("sim-hint");
+        if (hint) { hint.hidden = false; hint.textContent = "Stopptid nådd (" + (document.getElementById("stop-label") || {}).textContent + ") — simuleringen pausad. Öppna Historik för att exportera."; }
+      }
       PS.draw(state);
       updateTrafficStats();
     } catch (err) {
@@ -1241,6 +1247,7 @@
     const cv = document.getElementById("clock-val"); if (cv) cv.textContent = fmtClock(h);
     const rv = document.getElementById("curve-val"); if (rv) rv.textContent = Math.round(sim._rateNow != null ? sim._rateNow : (sim.curveAt ? sim.curveAt(h) : sim.arrivalRate));
     const cl = document.getElementById("clock"); if (cl && document.activeElement !== cl) cl.value = h.toFixed(2);
+    const te = document.getElementById("sim-time"); if (te && document.activeElement !== te) te.value = fmtClock(h);
   }
   if (curveCv) {
     let painting = false, lastI = -1;
@@ -1269,10 +1276,46 @@
     updateClockUI(); drawArrCurve(); scheduleSave();
   });
 
+  // ---- stop time: run until a chosen date/time, then pause ---------------
+  function updateStopUI() {
+    const el = document.getElementById("stop-label");
+    if (!el) return;
+    if (!sim.stopDate) { el.textContent = "–"; return; }
+    const d = new Date(sim.stopDate + "T12:00:00");
+    const wd = ["sön", "mån", "tis", "ons", "tor", "fre", "lör"][d.getDay()];
+    el.textContent = wd + " " + d.getDate() + "/" + (d.getMonth() + 1) + " " + fmtClock(sim.stopHour || 0);
+    const sd = document.getElementById("stop-date"); if (sd && document.activeElement !== sd) sd.value = sim.stopDate;
+    const st2 = document.getElementById("stop-time"); if (st2 && document.activeElement !== st2) st2.value = fmtClock(sim.stopHour || 0);
+  }
+  const stopDateEl = document.getElementById("stop-date"), stopTimeEl = document.getElementById("stop-time");
+  if (stopDateEl) stopDateEl.addEventListener("change", () => {
+    sim.stopDate = stopDateEl.value || null;
+    if (sim.stopDate && sim.stopHour == null) sim.stopHour = 0;
+    updateStopUI(); scheduleSave();
+  });
+  if (stopTimeEl) stopTimeEl.addEventListener("change", () => {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(stopTimeEl.value || "");
+    if (m) { sim.stopHour = Math.min(23.99, (+m[1]) + (+m[2]) / 60); updateStopUI(); scheduleSave(); }
+  });
+  function setStopFromNow(addDays, addMonths) {
+    const d = sim.dateNow ? sim.dateNow() : new Date();
+    if (addMonths) d.setMonth(d.getMonth() + addMonths);
+    if (addDays) d.setDate(d.getDate() + addDays);
+    sim.stopDate = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+    sim.stopHour = sim.hourNow ? sim.hourNow() : 8; // same time of day as now
+    updateStopUI(); scheduleSave();
+  }
+  const stopBtn = (id, fn) => { const b = document.getElementById(id); if (b) b.addEventListener("click", fn); };
+  stopBtn("stop-day", () => setStopFromNow(1, 0));
+  stopBtn("stop-week", () => setStopFromNow(7, 0));
+  stopBtn("stop-month", () => setStopFromNow(0, 1));
+  stopBtn("stop-clear", () => { sim.stopDate = null; sim.stopHour = null; updateStopUI(); scheduleSave(); });
+
   // ---- calendar: weekday / month multipliers (paintable) + date + payday ---
   const WD_NAMES = ["mån", "tis", "ons", "tor", "fre", "lör", "sön"];
   const MON_NAMES = ["jan", "feb", "mar", "apr", "maj", "jun", "jul", "aug", "sep", "okt", "nov", "dec"];
   function defaultWeek() { return [0.8, 0.85, 0.9, 1.0, 1.3, 1.5, 1.1]; }
+  function defaultDom() { const d = new Array(31).fill(1); d[24] = 2; d[25] = 1.4; return d; } // payday bump on the 25th
   function defaultMonth() { return [0.7, 0.8, 0.9, 0.95, 1.0, 1.0, 0.9, 0.95, 1.0, 1.05, 1.2, 1.6]; }
   // Tiny paintable histogram (same drag-to-shape interaction as the day curve).
   function miniHist(cvId, opts) {
@@ -1337,6 +1380,13 @@
     highlight: () => (sim.calMult ? sim.calMult().month : -1),
     onPaint: () => { updateCalUI(); scheduleSave(); },
   });
+  const DOM_LABELS = new Array(31).fill("").map((_, i) => ([0, 4, 9, 14, 19, 24, 30].includes(i) ? String(i + 1) : ""));
+  const domHist = miniHist("dom-curve", {
+    values: () => (sim.domMult && sim.domMult.length === 31 ? sim.domMult : (sim.domMult = defaultDom())),
+    max: 3, labels: DOM_LABELS, names: new Array(31).fill("").map((_, i) => (i + 1) + (i < 2 ? ":a" : ":e")),
+    highlight: () => (sim.calMult ? sim.calMult().dom - 1 : -1),
+    onPaint: () => { updateCalUI(); scheduleSave(); },
+  });
   function updateCalUI() {
     if (!sim.calMult) return;
     const cm = sim.calMult();
@@ -1346,19 +1396,26 @@
     if (el("cal-mult")) el("cal-mult").textContent = (Math.round(cm.total * 100) / 100);
     if (el("week-x")) el("week-x").textContent = cm.w;
     if (el("month-x")) el("month-x").textContent = cm.m;
-    if (el("payday-val")) el("payday-val").textContent = sim.payday;
-    if (el("payday-x-val")) el("payday-x-val").textContent = (+sim.paydayMult).toFixed(1);
+    if (el("dom-x")) el("dom-x").textContent = cm.p;
     const sd = el("sim-date"); if (sd && document.activeElement !== sd && sim.dateStr) sd.value = sim.dateStr;
     if (el("m-date")) el("m-date").textContent = lbl;
     if (el("m-clock") && sim.hourNow) el("m-clock").textContent = fmtClock(sim.hourNow());
-    weekHist.draw(); monthHist.draw();
+    weekHist.draw(); monthHist.draw(); domHist.draw();
   }
   const dateEl = document.getElementById("sim-date");
   if (dateEl) dateEl.addEventListener("change", () => {
     if (dateEl.value) { sim.dateStr = dateEl.value; updateCalUI(); scheduleSave(); }
   });
-  rangeBind("payday", "payday-val", (v) => { sim.payday = v; updateCalUI(); scheduleSave(); });
-  rangeBind("payday-x", "payday-x-val", (v) => { sim.paydayMult = v; updateCalUI(); scheduleSave(); });
+  // Start time next to the date — same clock as the slider, friendlier entry.
+  const timeEl = document.getElementById("sim-time");
+  if (timeEl) timeEl.addEventListener("change", () => {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(timeEl.value || "");
+    if (!m) return;
+    const h = Math.min(23.99, (+m[1]) + (+m[2]) / 60);
+    sim.clockStart = ((h - sim.t / 60) % 24 + 24) % 24; // so hourNow() === h right now
+    updateClockUI(); drawArrCurve(); updateCalUI(); scheduleSave();
+  });
+
 
   // ---- dedicated history view (large overlay chart) -----------------------
   const hvEl = document.getElementById("history-view");
@@ -1462,6 +1519,113 @@
       info.textContent = hist.length + " mätpunkter · " + fmtClock(hist[0].h) + "–" + fmtClock(hist[hist.length - 1].h);
     }
   }
+
+  // ---- exports from the history view: PNG / CSV / period heatmap ----------
+  function exportChartPNG() {
+    if (!hvCv) return;
+    const tmp = document.createElement("canvas");
+    tmp.width = hvCv.width; tmp.height = hvCv.height + 34 * (window.devicePixelRatio || 1);
+    const c = tmp.getContext("2d");
+    const dpr = window.devicePixelRatio || 1;
+    c.fillStyle = "#fff"; c.fillRect(0, 0, tmp.width, tmp.height);
+    c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    c.fillStyle = "#0f1116"; c.font = "600 13px system-ui, sans-serif"; c.textBaseline = "middle";
+    const hist = sim.history || [];
+    const range = hist.length ? (hist[0].d || "") + " " + fmtClock(hist[0].h) + " – " + (hist[hist.length - 1].d || "") + " " + fmtClock(hist[hist.length - 1].h) : "";
+    c.fillText("Historik — " + currentName() + "  ·  " + range, 10, 14);
+    c.font = "11px system-ui, sans-serif"; c.fillStyle = "#3b5bdb"; c.fillText("■ rullande", 10, 28);
+    c.fillStyle = "#2b8a3e"; c.fillText("■ parkerade", 80, 28);
+    c.fillStyle = "#e03131"; c.fillText("■ kö", 160, 28);
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.drawImage(hvCv, 0, 34 * dpr);
+    tmp.toBlob((b) => { if (b) download("historik-" + currentName() + ".png", URL.createObjectURL(b), true); }, "image/png");
+  }
+  function exportCSV() {
+    const hist = sim.history || [];
+    let out = "simtid_s;datum;klocka;rullande;parkerade;ko\n";
+    for (const s2 of hist) out += Math.round(s2.t) + ";" + (s2.d || "") + ";" + fmtClock(s2.h) + ";" + s2.c + ";" + s2.p + ";" + s2.q + "\n";
+    const blob = new Blob([out], { type: "text/csv;charset=utf-8" });
+    download("historik-" + currentName() + ".csv", URL.createObjectURL(blob), true);
+  }
+  // Period heatmap: average congestion per road segment (time-integrated) +
+  // per-stall utilization (share of the period the stall was occupied).
+  function exportPeriodHeatmap() {
+    const net = sim.net, stalls = state.parking ? state.parking.stalls : [];
+    if (!net || !net.edges.length || sim.t < 1) {
+      const info = document.getElementById("hv-info");
+      if (info) info.textContent = "Kör simuleringen först — heatmappen bygger på den simulerade perioden.";
+      return;
+    }
+    // fit a local camera to the drawn content
+    let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+    const grow = (x, y) => { if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; };
+    for (const n of net.nodes) grow(n.x, n.y);
+    for (const s2 of stalls) grow(s2.cx, s2.cy);
+    for (const b of state.buildings || []) { if (b.poly) for (const p of b.poly) grow(p[0], p[1]); else { grow(b.x, b.y); grow(b.x + b.w, b.y + b.h); } }
+    const pad = 20, W = 1600, H = Math.max(400, Math.round(W * (maxY - minY + 2 * pad) / (maxX - minX + 2 * pad)));
+    const cv = document.createElement("canvas"); cv.width = W; cv.height = H + 70;
+    const c = cv.getContext("2d");
+    const sc = Math.min(W / (maxX - minX + 2 * pad), H / (maxY - minY + 2 * pad));
+    const w2s = (x, y) => [(x - minX + pad) * sc, 70 + (y - minY + pad) * sc];
+    c.fillStyle = "#f3f1ec"; c.fillRect(0, 0, W, H + 70);
+    // buildings (light outline for context)
+    c.fillStyle = "rgba(140,150,140,0.25)"; c.strokeStyle = "rgba(90,100,90,0.4)";
+    for (const b of state.buildings || []) {
+      const pts = b.poly && b.poly.length >= 3 ? b.poly : [[b.x, b.y], [b.x + b.w, b.y], [b.x + b.w, b.y + b.h], [b.x, b.y + b.h]];
+      c.beginPath();
+      pts.forEach((p, i) => { const s3 = w2s(p[0], p[1]); if (i) c.lineTo(s3[0], s3[1]); else c.moveTo(s3[0], s3[1]); });
+      c.closePath(); c.fill(); c.stroke();
+    }
+    // stalls tinted by utilization (green -> red over the period)
+    const period = Math.max(1, sim.t);
+    for (const s2 of stalls) {
+      const u = Math.min(1, (s2._occT || 0) / period);
+      const cr = s2.corners;
+      c.beginPath();
+      cr.forEach((p, i) => { const s3 = w2s(p[0], p[1]); if (i) c.lineTo(s3[0], s3[1]); else c.moveTo(s3[0], s3[1]); });
+      c.closePath();
+      c.fillStyle = "rgba(" + Math.round(90 + 150 * u) + "," + Math.round(175 - 120 * u) + "," + Math.round(70 - 30 * u) + ",0.8)";
+      c.fill();
+    }
+    // road segments by AVERAGE congestion over the period
+    c.lineCap = "round";
+    for (const e of net.edges) {
+      const avg = Math.min(1, (e._congSum || 0) / period);
+      const A = net.nodes[e.a], B = net.nodes[e.b];
+      if (!A || !B) continue;
+      const p1 = w2s(A.x, A.y), p2 = w2s(B.x, B.y);
+      c.strokeStyle = "rgba(" + (avg < 0.5 ? Math.round(90 + avg * 300) : 240) + "," + (avg < 0.5 ? 175 : Math.round(170 - (avg - 0.5) * 240)) + ",50," + (0.35 + avg * 0.6) + ")";
+      c.lineWidth = 2 + avg * 8;
+      c.beginPath(); c.moveTo(p1[0], p1[1]); c.lineTo(p2[0], p2[1]); c.stroke();
+    }
+    // queue hotspots: purple blobs where queued cars accumulated time
+    if (sim._queueGrid && sim._queueGrid.size) {
+      let qMax = 0;
+      for (const v of sim._queueGrid.values()) if (v > qMax) qMax = v;
+      for (const [key, v] of sim._queueGrid) {
+        const [gx, gy] = key.split(",").map(Number);
+        const p = w2s(gx * 8, gy * 8);
+        const f = v / qMax;
+        if (f < 0.08) continue; // skip noise
+        c.beginPath(); c.arc(p[0], p[1], (5 + 14 * f) * Math.min(1, sc / 2 + 0.5), 0, Math.PI * 2);
+        c.fillStyle = "rgba(120,40,180," + (0.15 + 0.4 * f) + ")";
+        c.fill();
+      }
+    }
+    // title + legend
+    const hist = sim.history || [];
+    const ps = (sim._periodStart && sim._periodStart.d) ? sim._periodStart
+      : (hist.length ? { d: hist[0].d, h: hist[0].h } : {});
+    c.fillStyle = "#0f1116"; c.font = "600 22px system-ui, sans-serif"; c.textBaseline = "middle";
+    c.fillText("Periodheatmap — " + currentName(), 16, 24);
+    c.font = "14px system-ui, sans-serif"; c.fillStyle = "rgba(15,17,22,0.7)";
+    c.fillText((ps.d ? ps.d + " " + fmtClock(ps.h || 0) : "") + " – " + (sim.dateStr || "") + " " + fmtClock(sim.hourNow ? sim.hourNow() : 0) +
+      "   ·   vägfärg = snitträngsel   ·   lila = köområden   ·   platsfärg = beläggningsgrad (grön låg, röd hög)", 16, 50);
+    cv.toBlob((b) => { if (b) download("heatmap-" + currentName() + ".png", URL.createObjectURL(b), true); }, "image/png");
+  }
+  { const b1 = document.getElementById("hv-png"); if (b1) b1.addEventListener("click", exportChartPNG);
+    const b2 = document.getElementById("hv-csv"); if (b2) b2.addEventListener("click", exportCSV);
+    const b3 = document.getElementById("hv-heat"); if (b3) b3.addEventListener("click", exportPeriodHeatmap); }
 
   // ---- time-series chart: circulating / parked / queue over sim time ------
   function drawStatsChart() {
@@ -1680,7 +1844,7 @@
         arrivalRate: sim.arrivalRate, dwellMin: sim.dwellMin, speedKmh: sim.speedKmh, followSec: sim.followSec, tempo: sim.tempo,
         arrivalCurve: sim.arrivalCurve || null, clock: sim.hourNow ? +sim.hourNow().toFixed(2) : 8,
         dateStr: sim.dateStr || null, weekMult: sim.weekMult || null, monthMult: sim.monthMult || null,
-        payday: sim.payday, paydayMult: sim.paydayMult,
+        domMult: sim.domMult || null, stopDate: sim.stopDate || null, stopHour: sim.stopHour,
         meanAggr: sim.meanAggr, meanCaution: sim.meanCaution, traitSpread: sim.traitSpread, allowOvertake: sim.allowOvertake,
       },
       map: (state.mapMode && state.map && state._anchor) ? {
@@ -1722,7 +1886,8 @@
     state.layoutMode = "manual"; state.tool = "select"; state._draft = null; state.selection = null;
     state._report = null; retailCount = 0; state.occupancyFrac = 0.4;
     sim.arrivalCurve = defaultCurve(40); sim.clockStart = ((8 - sim.t / 60) % 24 + 24) % 24; // fresh day profile per new project
-    sim.weekMult = defaultWeek(); sim.monthMult = defaultMonth(); sim.payday = 25; sim.paydayMult = 2;
+    sim.weekMult = defaultWeek(); sim.monthMult = defaultMonth(); sim.domMult = defaultDom();
+    sim.stopDate = null; sim.stopHour = null; updateStopUI();
     sim.dateStr = new Date().toISOString().slice(0, 10);
     sim.history = []; sim._histT = null;
     segSetActive("base-seg", "styled"); segSetActive("tool-seg", "select");
@@ -1768,8 +1933,26 @@
     const opt = document.querySelector('#project-select option[value="' + r.current + '"]');
     if (opt) opt.textContent = it.name;
   }
+  // Duplicate the current project: copy the saved blob under a new id — the
+  // cheap way to A/B-test a change ("vad innebär en till infart?") without
+  // rebuilding the area from scratch.
+  function duplicateProject() {
+    hideDelConfirm(); saveProject(); // flush the latest edits into the blob first
+    const r = loadReg(); if (!r.current) return;
+    const raw = localStorage.getItem(projKey(r.current));
+    if (!raw) return;
+    const id = newId();
+    const srcItem = r.items.find((x) => x.id === r.current);
+    const name = ((srcItem && srcItem.name) || "Projekt") + " (kopia)";
+    try { localStorage.setItem(projKey(id), raw); } catch (e) { setStatus("Kunde inte spara kopian", false); return; }
+    r.items.push({ id, name, updated: Date.now() });
+    r.current = id; saveReg(r);
+    loadProjectData(id); renameProject(name); refreshProjectSelect();
+    const nm = document.getElementById("project-name"); nm.focus(); nm.select();
+  }
   document.getElementById("project-select").addEventListener("change", (e) => switchProject(e.target.value));
   document.getElementById("btn-new-project").addEventListener("click", createProject);
+  document.getElementById("btn-dup-project").addEventListener("click", duplicateProject);
   document.getElementById("btn-del-project").addEventListener("click", () => { document.getElementById("del-confirm").hidden = false; });
   document.getElementById("btn-del-yes").addEventListener("click", () => { hideDelConfirm(); deleteProject(); });
   document.getElementById("btn-del-no").addEventListener("click", hideDelConfirm);
@@ -1819,11 +2002,14 @@
     { const ch = t.clock != null ? t.clock : 8; sim.clockStart = ((ch - sim.t / 60) % 24 + 24) % 24; }
     sim.weekMult = (Array.isArray(t.weekMult) && t.weekMult.length === 7) ? t.weekMult.slice() : defaultWeek();
     sim.monthMult = (Array.isArray(t.monthMult) && t.monthMult.length === 12) ? t.monthMult.slice() : defaultMonth();
-    sim.payday = t.payday != null ? t.payday : 25;
-    sim.paydayMult = t.paydayMult != null ? t.paydayMult : 2;
+    if (Array.isArray(t.domMult) && t.domMult.length === 31) sim.domMult = t.domMult.slice();
+    else if (t.payday != null) { // migrate the old single-payday setting into the curve
+      sim.domMult = new Array(31).fill(1); sim.domMult[Math.max(1, Math.min(31, t.payday)) - 1] = t.paydayMult != null ? t.paydayMult : 2;
+    } else sim.domMult = defaultDom();
     sim.dateStr = t.dateStr || new Date().toISOString().slice(0, 10);
+    sim.stopDate = t.stopDate || null; sim.stopHour = t.stopHour != null ? t.stopHour : null;
+    updateStopUI();
     sim.history = []; sim._histT = null;
-    setSlider("payday", "payday-val", sim.payday); setSlider("payday-x", "payday-x-val", sim.paydayMult);
     if (t.dwellMin != null) sim.dwellMin = t.dwellMin;
     if (t.speedKmh != null) sim.speedKmh = t.speedKmh;
     if (t.followSec != null) sim.followSec = t.followSec;

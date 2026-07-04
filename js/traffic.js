@@ -1185,8 +1185,16 @@
         }
       }
 
-      // Departures.
-      for (const car of sim.cars) if (car.state === "parked" && sim.t >= car.departAt) startLeaving(car);
+      // Departures — on the dwell timer, or early because the destination
+      // building just closed (only for timer-driven cars; ped-driven ones
+      // leave via their pedestrian walking back at closing).
+      const hDep = sim.hourNow();
+      for (const car of sim.cars) {
+        if (car.state !== "parked") continue;
+        const closedDest = isFinite(car.departAt) && car.destB >= 0 && state.buildings[car.destB] &&
+          PS.buildingOpen && !PS.buildingOpen(state.buildings[car.destB], hDep);
+        if (sim.t >= car.departAt || closedDest) startLeaving(car);
+      }
 
       // Group moving cars by directed lane; sort by position. Also record each
       // car's RENDERED position (with keep-right offset) for the proximity brake.
@@ -1518,8 +1526,13 @@
       if (sim.cars.some((c) => c._dead)) sim.cars = sim.cars.filter((c) => !c._dead);
 
       // ---- pedestrians: walk to the building and back (drives dwell time) ----
+      const hPed = sim.hourNow();
       for (const ped of sim.peds) {
-        if (ped.phase === "inBuilding") { if (sim.t >= ped.shopUntil) ped.phase = "toStall"; continue; }
+        // Closing time empties the building: shoppers leave when the door
+        // shuts even if their planned visit had time left.
+        const destBldg = ped.car && ped.car.destB >= 0 ? state.buildings[ped.car.destB] : null;
+        const destClosed = destBldg && PS.buildingOpen && !PS.buildingOpen(destBldg, hPed);
+        if (ped.phase === "inBuilding") { if (sim.t >= ped.shopUntil || destClosed) ped.phase = "toStall"; continue; }
         ped.gawk = false;
         for (const cp of sim._crashPts) { if (Math.abs(ped.x - cp[0]) < 11 && Math.abs(ped.y - cp[1]) < 11) { ped.gawk = true; break; } }
         if (ped.gawk) continue; // stop and look at the crash
@@ -1531,8 +1544,9 @@
           ped.x = tgt[0]; ped.y = tgt[1];
           if ((ped.wpi || 0) < route.length - 1) { ped.wpi = (ped.wpi || 0) + 1; }
           else if (ped.phase === "toDoor") {
-            ped.phase = "inBuilding"; ped.shopUntil = sim.t + dwellSeconds() * 0.6 * dwellFactorFor(ped.car.destB);
             ped.route = [...route].reverse(); ped.wpi = 1; // walk the same way back to the car
+            if (destClosed) ped.phase = "toStall"; // locked door — turn straight back
+            else { ped.phase = "inBuilding"; ped.shopUntil = sim.t + dwellSeconds() * 0.6 * dwellFactorFor(ped.car.destB); }
           }
           else { ped._done = true; startLeaving(ped.car); }
         } else { ped.x += (dx / d) * stepd; ped.y += (dy / d) * stepd; }

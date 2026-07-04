@@ -1563,11 +1563,12 @@
     for (const s2 of stalls) grow(s2.cx, s2.cy);
     for (const b of state.buildings || []) { if (b.poly) for (const p of b.poly) grow(p[0], p[1]); else { grow(b.x, b.y); grow(b.x + b.w, b.y + b.h); } }
     const pad = 20, W = 1600, H = Math.max(400, Math.round(W * (maxY - minY + 2 * pad) / (maxX - minX + 2 * pad)));
-    const cv = document.createElement("canvas"); cv.width = W; cv.height = H + 70;
+    const LEG = 64; // bottom legend strip
+    const cv = document.createElement("canvas"); cv.width = W; cv.height = H + 70 + LEG;
     const c = cv.getContext("2d");
     const sc = Math.min(W / (maxX - minX + 2 * pad), H / (maxY - minY + 2 * pad));
     const w2s = (x, y) => [(x - minX + pad) * sc, 70 + (y - minY + pad) * sc];
-    c.fillStyle = "#f3f1ec"; c.fillRect(0, 0, W, H + 70);
+    c.fillStyle = "#f3f1ec"; c.fillRect(0, 0, W, H + 70 + LEG);
     // buildings (light outline for context)
     c.fillStyle = "rgba(140,150,140,0.25)"; c.strokeStyle = "rgba(90,100,90,0.4)";
     for (const b of state.buildings || []) {
@@ -1633,11 +1634,37 @@
     const hist = sim.history || [];
     const ps = (sim._periodStart && sim._periodStart.d) ? sim._periodStart
       : (hist.length ? { d: hist[0].d, h: hist[0].h } : {});
-    c.fillStyle = "#0f1116"; c.font = "600 22px system-ui, sans-serif"; c.textBaseline = "middle";
-    c.fillText("Periodheatmap — " + currentName(), 16, 24);
-    c.font = "14px system-ui, sans-serif"; c.fillStyle = "rgba(15,17,22,0.7)";
-    c.fillText((ps.d ? ps.d + " " + fmtClock(ps.h || 0) : "") + " – " + (sim.dateStr || "") + " " + fmtClock(sim.hourNow ? sim.hourNow() : 0) +
-      "   ·   vägfärg = snitträngsel   ·   lila = köområden   ·   orange = bil/gående-konflikter   ·   platsfärg = beläggningsgrad (grön låg, röd hög)", 16, 50);
+    c.fillStyle = "#0f1116"; c.font = "600 24px system-ui, sans-serif"; c.textBaseline = "middle";
+    c.fillText("Periodheatmap — " + currentName(), 16, 26);
+    c.font = "15px system-ui, sans-serif"; c.fillStyle = "rgba(15,17,22,0.7)";
+    c.fillText("Simulerad period: " + (ps.d ? ps.d + " " + fmtClock(ps.h || 0) : "") + " – " + (sim.dateStr || "") + " " + fmtClock(sim.hourNow ? sim.hourNow() : 0), 16, 52);
+    // ---- legend strip (real swatches, not just words) ----
+    const ly = 70 + H + LEG / 2;
+    c.fillStyle = "#fff"; c.fillRect(0, 70 + H, W, LEG);
+    c.strokeStyle = "rgba(15,17,22,0.12)"; c.beginPath(); c.moveTo(0, 70 + H); c.lineTo(W, 70 + H); c.stroke();
+    c.font = "15px system-ui, sans-serif"; c.textBaseline = "middle";
+    let lx = 20;
+    const label = (txt) => { c.fillStyle = "rgba(15,17,22,0.85)"; c.fillText(txt, lx, ly); lx += c.measureText(txt).width + 34; };
+    // 1. road congestion gradient
+    const gradSegs = [["#5aaf46", 0], ["#e0aa1e", 1], ["#e03131", 2]];
+    for (const [col, i] of gradSegs) { c.strokeStyle = col; c.lineWidth = 6; c.lineCap = "round"; c.beginPath(); c.moveTo(lx + i * 18, ly); c.lineTo(lx + i * 18 + 14, ly); c.stroke(); }
+    lx += 3 * 18 + 6;
+    label("Snitträngsel väg (låg → hög)");
+    // 2. queue blob
+    c.fillStyle = "rgba(120,40,180,0.45)"; c.beginPath(); c.arc(lx + 8, ly, 9, 0, Math.PI * 2); c.fill(); lx += 24;
+    label("Köområde");
+    // 3. conflict ring
+    c.fillStyle = "rgba(240,110,20,0.25)"; c.beginPath(); c.arc(lx + 8, ly, 9, 0, Math.PI * 2); c.fill();
+    c.strokeStyle = "rgba(220,90,10,0.8)"; c.lineWidth = 2; c.beginPath(); c.arc(lx + 8, ly, 9, 0, Math.PI * 2); c.stroke(); lx += 24;
+    label("Bil/gående-konflikt");
+    // 4. stall utilization swatches
+    c.fillStyle = "rgba(90,175,70,0.8)"; c.fillRect(lx, ly - 8, 12, 16);
+    c.fillStyle = "rgba(240,55,40,0.8)"; c.fillRect(lx + 14, ly - 8, 12, 16); lx += 32;
+    label("Beläggningsgrad plats (grön låg → röd hög)");
+    // 5. building
+    c.fillStyle = "rgba(140,150,140,0.35)"; c.strokeStyle = "rgba(90,100,90,0.5)";
+    c.fillRect(lx, ly - 8, 16, 16); c.strokeRect(lx, ly - 8, 16, 16); lx += 24;
+    label("Byggnad");
     cv.toBlob((b) => { if (b) download("heatmap-" + currentName() + ".png", URL.createObjectURL(b), true); }, "image/png");
   }
   { const b1 = document.getElementById("hv-png"); if (b1) b1.addEventListener("click", exportChartPNG);

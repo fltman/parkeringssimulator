@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Parkeringssimulator</title>
-    <link rel="stylesheet" href="css/styles.css?v=104" />
+    <link rel="stylesheet" href="css/styles.css?v=105" />
   </head>
   <body>
     <div id="app">
@@ -37,6 +37,7 @@
             <div class="hv-head">
               <h3>Historik</h3>
               <span class="hv-info" id="hv-info"></span>
+              <button id="hv-ai" class="ghost">✨ AI-analys</button>
               <button id="hv-png" class="ghost">PNG</button>
               <button id="hv-csv" class="ghost">CSV</button>
               <button id="hv-heat" class="ghost">Heatmap</button>
@@ -49,6 +50,7 @@
               <span class="hv-info">Grå band = natt (22–06) · streck = midnatt · håll muspekaren över för avläsning</span>
             </div>
             <canvas id="hv-canvas"></canvas>
+            <div id="hv-ai-out" hidden style="max-height:38%;overflow:auto;border-top:1px solid #e2e5ea;margin-top:8px;padding-top:8px;font-size:13px;line-height:1.5"></div>
           </div>
         </div>
 
@@ -387,11 +389,11 @@
       </div>
     </div>
 
-    <script src="js/geometry.js?v=104"></script>
-    <script src="js/parking.js?v=104"></script>
-    <script src="js/traffic.js?v=104"></script>
-    <script src="js/render.js?v=104"></script>
-    <script src="js/report.js?v=104"></script>
-    <script src="js/app.js?v=104"></script>
+    <script src="js/geometry.js?v=105"></script>
+    <script src="js/parking.js?v=105"></script>
+    <script src="js/traffic.js?v=105"></script>
+    <script src="js/render.js?v=105"></script>
+    <script src="js/report.js?v=105"></script>
+    <script src="js/app.js?v=105"></script>
   </body>
 </html>

@@ -1719,6 +1719,97 @@
     label("Byggnad");
     cv.toBlob((b) => { if (b) download("heatmap-" + currentName() + ".png", URL.createObjectURL(b), true); }, "image/png");
   }
+  // ---- AI analysis of the simulated PERIOD (hotspots named by landmark) ---
+  function nearestLandmark(x, y) {
+    let best = null, bd = Infinity;
+    for (const b of state.buildings || []) {
+      const c = b.poly && b.poly.length >= 3 ? g.centroid(b.poly) : [b.x + b.w / 2, b.y + b.h / 2];
+      const d = Math.hypot(c[0] - x, c[1] - y);
+      if (d < bd) { bd = d; best = (b.name || "Byggnad") + " (" + Math.round(d) + " m)"; }
+    }
+    (state.gates || []).forEach((gt, i) => {
+      const d = Math.hypot(gt.x - x, gt.y - y);
+      if (d < bd) { bd = d; best = (gt.type === "in" ? "infarten" : "utfarten") + " #" + (i + 1) + " (" + Math.round(d) + " m)"; }
+    });
+    return best || "okänt läge";
+  }
+  function topCells(map, cell, n) {
+    if (!map || !map.size) return [];
+    return [...map.entries()].sort((a2, b2) => b2[1] - a2[1]).slice(0, n)
+      .map(([k, v]) => { const [gx, gy] = k.split(",").map(Number); return { x: gx * cell, y: gy * cell, v }; });
+  }
+  function periodPayload() {
+    const hist = sim.history || [];
+    const ps = (sim._periodStart && sim._periodStart.d) ? sim._periodStart : (hist.length ? { d: hist[0].d, h: hist[0].h } : {});
+    const lines = [];
+    lines.push("Simulerad period: " + (ps.d || "?") + " " + fmtClock(ps.h || 0) + " – " + (sim.dateStr || "?") + " " + fmtClock(sim.hourNow ? sim.hourNow() : 0));
+    const stalls = state.parking ? state.parking.stalls : [];
+    lines.push("Anläggning: " + stalls.length + " p-platser, " + (state.buildings || []).length + " byggnader, " +
+      (state.gates || []).filter((x) => x.type === "in").length + " infarter, " + (state.gates || []).filter((x) => x.type === "out").length + " utfarter.");
+    if (hist.length) {
+      let pc = hist[0], pq = hist[0], pp = hist[0];
+      for (const s2 of hist) { if (s2.c > pc.c) pc = s2; if (s2.q > pq.q) pq = s2; if (s2.p > pp.p) pp = s2; }
+      lines.push("Toppar: " + pc.c + " rullande (kl " + fmtClock(pc.h) + "), " + pp.p + " parkerade (kl " + fmtClock(pp.h) + "), " + pq.q + " i kö (kl " + fmtClock(pq.h) + ").");
+    }
+    lines.push("Räknare: " + (sim.parkedTotal || 0) + " parkerade besök, " + (sim.turnedAway || 0) + " avvisade, " + (sim.gaveUp || 0) + " gav upp, " + (sim.collisions || 0) + " krockar, " + (sim.reroutes || 0) + " omplaneringar, " + (sim.settles || 0) + " platsbyten i kö.");
+    const q = topCells(sim._queueGrid, 8, 5);
+    if (q.length) lines.push("Största köområdena (tid ackumulerad): " + q.map((c) => "vid " + nearestLandmark(c.x, c.y) + " [" + Math.round(c.v / 60) + " min]").join("; ") + ".");
+    const cf = topCells(sim._confPeriod, 4, 5);
+    if (cf.length) lines.push("Bil/gående-konfliktpunkter: " + cf.map((c) => "vid " + nearestLandmark(c.x, c.y)).join("; ") + ".");
+    if (stalls.length && sim.t > 60) {
+      const period = Math.max(1, sim.t);
+      let unused = 0, hot = 0;
+      for (const s2 of stalls) { const u = (s2._occT || 0) / period; if (u < 0.02) unused++; else if (u > 0.7) hot++; }
+      lines.push("Platsutnyttjande: " + Math.round(100 * unused / stalls.length) + "% av platserna stod i praktiken oanvända hela perioden, " + Math.round(100 * hot / stalls.length) + "% var upptagna >70% av tiden.");
+    }
+    const bl = (state.buildings || []).map((b, i) => {
+      const bta = Math.round((b.poly ? g.area(b.poly) : b.w * b.h) * (b.floors || 1));
+      const v = (sim.visitTotals || {})[i] || 0;
+      const open = b.closed ? "STÄNGD" : ((b.openFrom != null ? b.openFrom : 0) + "-" + (b.openTo != null ? b.openTo : 24));
+      return (b.name || "Byggnad " + (i + 1)) + ": BTA " + bta + ", attraktion " + Math.round((b.attract != null ? b.attract : 1) * 100) + "%, öppet " + open + ", " + v + " besök";
+    });
+    if (bl.length) lines.push("Byggnader: " + bl.join(" | "));
+    if (sim.net) {
+      const worst = sim.net.edges.filter((e) => (e._congSum || 0) > 0).sort((a2, b2) => b2._congSum - a2._congSum).slice(0, 3)
+        .map((e) => { const A = sim.net.nodes[e.a]; return "vid " + nearestLandmark(A.x, A.y) + " (snitt " + Math.round((e._congSum / Math.max(1, sim.t)) * 100) + "% trängsel)"; });
+      if (worst.length) lines.push("Mest belastade vägavsnitt: " + worst.join("; ") + ".");
+    }
+    return lines.join("\n");
+  }
+  const AI_PERIOD_SYS =
+    "Du är en erfaren trafik- och parkeringsplanerare. Du får en sammanställning från en LÄNGRE simulerad period (dygn/vecka/månad) av en parkeringsanläggning: toppar, köområden, konfliktpunkter, platsutnyttjande och besök per byggnad — alla lägen är angivna relativt namngivna byggnader/infarter. " +
+    "Granska helheten och ge en prioriterad lista med högst 6 KONKRETA åtgärder (t.ex. 'flytta utfarten närmare X', 'krymp sektionen vid Y — 40% av platserna används aldrig', 'justera öppettider/attraktionskraft för Z', 'separera gångstråket vid konfliktpunkten vid W'). " +
+    "Peka också ut det som fungerar bra. Svara på svenska med korrekt å, ä, ö. Markdown: kort rubrik, 2 meningars sammanfattning, punktlista rangordnad efter effekt.";
+  async function askClaudePeriod() {
+    const key = ((document.getElementById("ai-key") || {}).value || localStorage.getItem("ps_openrouter_key") || "").trim();
+    const out = document.getElementById("hv-ai-out");
+    if (!out) return;
+    out.hidden = false;
+    if (!key) { out.innerHTML = '<p class="rc-msg">Ingen OpenRouter-nyckel — klistra in den under Analys-fliken först.</p>'; return; }
+    if (!sim.history || sim.history.length < 3) { out.innerHTML = '<p class="rc-msg">Kör simuleringen en stund först — analysen bygger på periodens data.</p>'; return; }
+    const btn = document.getElementById("hv-ai"); const lbl = btn.textContent; btn.disabled = true; btn.textContent = "Claude tänker…";
+    out.innerHTML = '<p class="rc-msg">Skickar periodens data till Claude…</p>';
+    try {
+      const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: { "Authorization": "Bearer " + key, "Content-Type": "application/json", "HTTP-Referer": location.origin, "X-Title": "Parkeringssimulator" },
+        body: JSON.stringify({
+          model: "anthropic/claude-sonnet-5",
+          messages: [{ role: "system", content: AI_PERIOD_SYS }, { role: "user", content: periodPayload() }],
+          max_tokens: 2000, temperature: 0.4,
+        }),
+        signal: AbortSignal.timeout(90000),
+      });
+      if (!resp.ok) { const t = await resp.text(); throw new Error("HTTP " + resp.status + " — " + t.slice(0, 200)); }
+      const data = await resp.json();
+      const txt = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
+      out.innerHTML = '<span class="ai-badge">Claude · sonnet-5 · periodanalys</span>' + (txt ? mdLite(txt) : '<p class="rc-msg">Tomt svar.</p>');
+    } catch (err) {
+      if (err.name === "TimeoutError" || err.name === "AbortError") err = new Error("ingen respons på 90 s — försök igen");
+      out.innerHTML = '<p class="rc-msg">Kunde inte nå Claude: ' + escapeHtml(err.message) + "</p>";
+    } finally { btn.disabled = false; btn.textContent = lbl; }
+  }
+  { const bA = document.getElementById("hv-ai"); if (bA) bA.addEventListener("click", askClaudePeriod); }
   { const b1 = document.getElementById("hv-png"); if (b1) b1.addEventListener("click", exportChartPNG);
     const b2 = document.getElementById("hv-csv"); if (b2) b2.addEventListener("click", exportCSV);
     const b3 = document.getElementById("hv-heat"); if (b3) b3.addEventListener("click", exportPeriodHeatmap); }

@@ -1025,10 +1025,36 @@
     if (rafId) cancelAnimationFrame(rafId);
     rafId = requestAnimationFrame(simFrame);
   }
+  // Snapshot the finished run for A/B comparison. KPIs come from the FULL
+  // history BEFORE downsampling (a downsampled max under-reads peaks;
+  // recentSearch is a rolling window, not a period average). Last pause wins.
+  function runKPIs(hist, counters) {
+    let peakQ = 0, peakC = 0, sumQ = 0;
+    for (const s2 of hist) { if (s2.q > peakQ) peakQ = s2.q; if (s2.c > peakC) peakC = s2.c; sumQ += s2.q; }
+    return Object.assign({ peakQ, peakC, avgQ: hist.length ? Math.round(sumQ / hist.length) : 0 }, counters);
+  }
+  function captureLastRun() {
+    const hist = sim.history || [];
+    if (sim.t < 60 || hist.length < 3) return;
+    const step = Math.max(1, Math.ceil(hist.length / 240));
+    const ds = [];
+    for (let i = 0; i < hist.length; i += step) ds.push({ t: hist[i].t, h: hist[i].h, c: hist[i].c, p: hist[i].p, q: hist[i].q });
+    const ps = (sim._periodStart && sim._periodStart.d) ? sim._periodStart : { d: hist[0].d, h: hist[0].h };
+    sim.lastRun = {
+      d0: ps.d, h0: +(+ps.h || 0).toFixed(2), d1: sim.dateStr, h1: sim.hourNow ? +sim.hourNow().toFixed(2) : 0,
+      counters: runKPIs(hist, {
+        parked: sim.parkedTotal || 0, away: sim.turnedAway || 0, gaveUp: sim.gaveUp || 0,
+        coll: sim.collisions || 0, revenue: Math.round(sim.revenue || 0),
+      }),
+      hist: ds,
+    };
+    scheduleSave(); // stop-time runs must persist too (beforeunload is dirty-gated)
+  }
   function pauseTraffic() {
     sim.running = false;
     if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
     document.getElementById("btn-traffic").textContent = "▶ Starta trafik";
+    captureLastRun();
     updateTrafficStats(); // freeze the header clock/stats at the TRUE paused state, not the last frame's
     requestDraw();
   }
@@ -1052,6 +1078,7 @@
     document.getElementById("t-search").textContent = Math.round(s.avgSearch) + " s";
     document.getElementById("t-coll").textContent = s.collisions || 0;
     document.getElementById("t-away").textContent = s.turnedAway || 0;
+    { const tr2 = document.getElementById("t-rev"); if (tr2) tr2.textContent = Math.round(sim.revenue || 0).toLocaleString(); }
     document.getElementById("m-occ").textContent = s.occupancyPct + "%";
     if (sim.selectedCar) refreshSelPanel();
   }
@@ -1363,6 +1390,39 @@
   stopBtn("stop-month", () => setStopFromNow(0, 1));
   stopBtn("stop-clear", () => { sim.stopDate = null; sim.stopHour = null; updateStopUI(); scheduleSave(); });
 
+  // ---- events (one-off spikes) editor --------------------------------------
+  function renderEvents() {
+    const list = document.getElementById("ev-list");
+    if (!list) return;
+    list.innerHTML = "";
+    (sim.events || []).forEach((ev, i) => {
+      const row = document.createElement("div");
+      row.className = "row";
+      row.style.cssText = "gap:4px;margin-bottom:4px;align-items:center";
+      row.innerHTML = '<input type="date">' +
+        '<input type="number" min="0" max="24" step="1" style="width:44px" title="från (timme)">' +
+        '<input type="number" min="0" max="24" step="1" style="width:44px" title="till (timme)">' +
+        '<input type="number" min="0" max="10" step="0.5" style="width:54px" title="faktor ×">' +
+        '<button class="ghost" title="Ta bort händelsen">✕</button>';
+      const ins = row.querySelectorAll("input");
+      ins[0].value = ev.date || ""; ins[1].value = ev.from != null ? ev.from : 18;
+      ins[2].value = ev.to != null ? ev.to : 23; ins[3].value = ev.mult != null ? ev.mult : 3;
+      const upd = () => { ev.date = ins[0].value; ev.from = +ins[1].value; ev.to = +ins[2].value; ev.mult = +ins[3].value; scheduleSave(); updateCalUI(); };
+      ins.forEach((el) => el.addEventListener("change", upd));
+      row.querySelector("button").addEventListener("click", () => { sim.events.splice(i, 1); renderEvents(); scheduleSave(); updateCalUI(); });
+      list.appendChild(row);
+    });
+  }
+  { const ea = document.getElementById("ev-add");
+    if (ea) ea.addEventListener("click", () => {
+      if (!sim.events) sim.events = [];
+      sim.events.push({ date: sim.dateStr || new Date().toISOString().slice(0, 10), from: 18, to: 23, mult: 3 });
+      renderEvents(); scheduleSave();
+    }); }
+
+  // ---- parking fee ----------------------------------------------------------
+  rangeBind("fee", "fee-val", (v) => { sim.feePerH = v; scheduleSave(); });
+
   // ---- calendar: weekday / month multipliers (paintable) + date + payday ---
   const WD_NAMES = ["mån", "tis", "ons", "tor", "fre", "lör", "sön"];
   const MON_NAMES = ["jan", "feb", "mar", "apr", "maj", "jun", "jul", "aug", "sep", "okt", "nov", "dec"];
@@ -1445,7 +1505,12 @@
     const lbl = WD_NAMES[cm.weekday] + " " + cm.dom + " " + MON_NAMES[cm.month];
     const el = (id) => document.getElementById(id);
     if (el("date-label")) el("date-label").textContent = lbl;
-    if (el("cal-mult")) el("cal-mult").textContent = (Math.round(cm.total * 100) / 100);
+    let evMult = 1;
+    if (sim.events && sim.events.length && sim.hourNow) {
+      const hNow2 = sim.hourNow();
+      for (const ev of sim.events) if (ev.date === sim.dateStr && hNow2 >= (ev.from || 0) && hNow2 < (ev.to != null ? ev.to : 24)) evMult *= (ev.mult != null ? ev.mult : 1);
+    }
+    if (el("cal-mult")) el("cal-mult").textContent = (Math.round(cm.total * 100) / 100) + (evMult !== 1 ? " · händelse ×" + evMult : "");
     if (el("week-x")) el("week-x").textContent = cm.w;
     if (el("month-x")) el("month-x").textContent = cm.m;
     if (el("dom-x")) el("dom-x").textContent = cm.p;
@@ -1472,7 +1537,7 @@
   // ---- dedicated history view (large overlay chart) -----------------------
   const hvEl = document.getElementById("history-view");
   let hvHoverX = null;
-  function hvOpen() { if (hvEl) { hvEl.hidden = false; drawHistoryView(); } }
+  function hvOpen() { if (hvEl) { hvEl.hidden = false; populateCompareSelect(); renderCmpTable(); drawHistoryView(); } }
   function hvClose() { if (hvEl) hvEl.hidden = true; }
   const hvOpenLink = document.getElementById("hv-open");
   if (hvOpenLink) hvOpenLink.addEventListener("click", (e) => { e.preventDefault(); hvOpen(); });
@@ -1495,7 +1560,7 @@
     const hist = sim.history || [];
     const dpr = window.devicePixelRatio || 1;
     const W = hvCv.clientWidth || 600, H = hvCv.clientHeight || 300;
-    if (hvCv.width !== Math.round(W * dpr)) { hvCv.width = Math.round(W * dpr); hvCv.height = Math.round(H * dpr); }
+    if (hvCv.width !== Math.round(W * dpr) || hvCv.height !== Math.round(H * dpr)) { hvCv.width = Math.round(W * dpr); hvCv.height = Math.round(H * dpr); }
     const c = hvCv.getContext("2d");
     c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, W, H);
     const info = document.getElementById("hv-info");
@@ -1511,6 +1576,8 @@
     const on = { c: document.getElementById("hv-c").checked, p: document.getElementById("hv-p").checked, q: document.getElementById("hv-q").checked };
     let maxY = 5;
     for (const s of hist) { if (on.c) maxY = Math.max(maxY, s.c); if (on.p) maxY = Math.max(maxY, s.p); if (on.q) maxY = Math.max(maxY, s.q); }
+    const cmpH = hvCompare && hvCompare.run && hvCompare.run.hist && hvCompare.run.hist.length > 1 ? hvCompare.run.hist : null;
+    if (cmpH) for (const s of cmpH) { if (on.c) maxY = Math.max(maxY, s.c); if (on.p) maxY = Math.max(maxY, s.p); if (on.q) maxY = Math.max(maxY, s.q); }
     // nice ceiling
     const pow = Math.pow(10, Math.max(0, String(Math.floor(maxY)).length - 1));
     maxY = Math.ceil(maxY / pow) * pow;
@@ -1554,6 +1621,25 @@
     if (on.c) line("c", "#3b5bdb");
     if (on.p) line("p", "#2b8a3e");
     if (on.q) line("q", "#e03131");
+    // Compare overlay: the other run's curves, DASHED, on the same
+    // hours-from-period-start axis (clock-of-day would wrap on long periods).
+    if (cmpH) {
+      const ct0 = cmpH[0].t;
+      const cline = (key, color) => {
+        c.strokeStyle = color; c.lineWidth = 1.5; c.setLineDash([5, 4]); c.beginPath();
+        let started = false;
+        for (const s of cmpH) {
+          const t2 = t0 + (s.t - ct0); // align by elapsed time from each run's start
+          if (t2 > t1) break;
+          const x = X(t2), y = Y(s[key]);
+          if (started) c.lineTo(x, y); else { c.moveTo(x, y); started = true; }
+        }
+        c.stroke(); c.setLineDash([]);
+      };
+      if (on.c) cline("c", "#3b5bdb");
+      if (on.p) cline("p", "#2b8a3e");
+      if (on.q) cline("q", "#e03131");
+    }
     // hover crosshair + readout
     if (hvHoverX != null && hvHoverX >= PL && hvHoverX <= PL + IW) {
       const tAt = t0 + (hvHoverX - PL) / IW * span;
@@ -1571,6 +1657,67 @@
       info.textContent = hist.length + " mätpunkter · " + fmtClock(hist[0].h) + "–" + fmtClock(hist[hist.length - 1].h);
     }
   }
+
+  // ---- A/B compare: overlay another project's saved run -------------------
+  let hvCompare = null; // { name, run } — the other project's lastRun
+  function populateCompareSelect() {
+    const sel = document.getElementById("hv-compare");
+    if (!sel) return;
+    const keep = sel.value;
+    sel.innerHTML = '<option value="">Jämför med…</option>';
+    const r = loadReg();
+    for (const it of r.items) {
+      if (it.id === r.current) continue;
+      try {
+        const blob = JSON.parse(localStorage.getItem(projKey(it.id)) || "null");
+        if (blob && blob.traffic && blob.traffic.lastRun) {
+          const o = document.createElement("option");
+          o.value = it.id; o.textContent = it.name;
+          sel.appendChild(o);
+        }
+      } catch (e) {}
+    }
+    sel.value = keep;
+  }
+  function renderCmpTable() {
+    const out = document.getElementById("hv-cmp-out");
+    if (!out) return;
+    if (!hvCompare) { out.hidden = true; out.innerHTML = ""; return; }
+    const mine = runKPIs(sim.history || [], {
+      parked: sim.parkedTotal || 0, away: sim.turnedAway || 0, gaveUp: sim.gaveUp || 0,
+      coll: sim.collisions || 0, revenue: Math.round(sim.revenue || 0),
+    });
+    const other = hvCompare.run.counters || {};
+    // rows: [label, key, higherIsBetter]
+    const rows = [
+      ["Parkerade besök", "parked", true], ["Avvisade", "away", false], ["Gav upp", "gaveUp", false],
+      ["Krockar", "coll", false], ["Toppkö", "peakQ", false], ["Snittkö", "avgQ", false], ["Intäkt (kr)", "revenue", true],
+    ];
+    let html = '<table style="border-collapse:collapse;width:100%"><tr style="text-align:left;color:#6b7280">' +
+      "<th></th><th>" + escapeHtml(currentName()) + "</th><th>" + escapeHtml(hvCompare.name) + "</th><th>Δ</th></tr>";
+    for (const [lbl, key, hi] of rows) {
+      const a2 = mine[key] || 0, b2 = other[key] || 0, d = a2 - b2;
+      const better = d === 0 ? null : (hi ? d > 0 : d < 0);
+      const col = better == null ? "#6b7280" : better ? "#2b8a3e" : "#e03131";
+      html += "<tr><td style='padding:2px 8px 2px 0'>" + lbl + "</td><td>" + a2 + "</td><td>" + b2 +
+        "</td><td style='color:" + col + ";font-weight:600'>" + (d > 0 ? "+" : "") + d + "</td></tr>";
+    }
+    html += "</table><p class='rc-msg' style='margin:4px 0 0'>Streckade kurvor = " + escapeHtml(hvCompare.name) +
+      " (start " + (hvCompare.run.d0 || "?") + " " + fmtClock(hvCompare.run.h0 || 0) + ")</p>";
+    out.hidden = false; out.innerHTML = html;
+  }
+  { const sel = document.getElementById("hv-compare");
+    if (sel) sel.addEventListener("change", () => {
+      hvCompare = null;
+      if (sel.value) {
+        try {
+          const blob = JSON.parse(localStorage.getItem(projKey(sel.value)) || "null");
+          const it = loadReg().items.find((x) => x.id === sel.value);
+          if (blob && blob.traffic && blob.traffic.lastRun) hvCompare = { name: (it && it.name) || "Annat projekt", run: blob.traffic.lastRun };
+        } catch (e) {}
+      }
+      renderCmpTable(); drawHistoryView();
+    }); }
 
   // ---- exports from the history view: PNG / CSV / period heatmap ----------
   function exportChartPNG() {
@@ -1601,13 +1748,9 @@
   }
   // Period heatmap: average congestion per road segment (time-integrated) +
   // per-stall utilization (share of the period the stall was occupied).
-  function exportPeriodHeatmap() {
+  function buildHeatmapCanvas() {
     const net = sim.net, stalls = state.parking ? state.parking.stalls : [];
-    if (!net || !net.edges.length || sim.t < 1) {
-      const info = document.getElementById("hv-info");
-      if (info) info.textContent = "Kör simuleringen först — heatmappen bygger på den simulerade perioden.";
-      return;
-    }
+    if (!net || !net.edges.length || sim.t < 1) return null;
     // fit a local camera to the drawn content
     let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
     const grow = (x, y) => { if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; };
@@ -1717,8 +1860,63 @@
     c.fillStyle = "rgba(140,150,140,0.35)"; c.strokeStyle = "rgba(90,100,90,0.5)";
     c.fillRect(lx, ly - 8, 16, 16); c.strokeRect(lx, ly - 8, 16, 16); lx += 24;
     label("Byggnad");
+    return cv;
+  }
+  function exportPeriodHeatmap() {
+    const cv = buildHeatmapCanvas();
+    if (!cv) {
+      const info = document.getElementById("hv-info");
+      if (info) info.textContent = "Kör simuleringen först — heatmappen bygger på den simulerade perioden.";
+      return;
+    }
     cv.toBlob((b) => { if (b) download("heatmap-" + currentName() + ".png", URL.createObjectURL(b), true); }, "image/png");
   }
+  // ---- report: one self-contained HTML file with everything ---------------
+  function exportReport() {
+    const hist = sim.history || [];
+    const ps = (sim._periodStart && sim._periodStart.d) ? sim._periodStart : (hist.length ? { d: hist[0].d, h: hist[0].h } : {});
+    const period = (ps.d ? ps.d + " " + fmtClock(ps.h || 0) : "–") + " – " + (sim.dateStr || "–") + " " + fmtClock(sim.hourNow ? sim.hourNow() : 0);
+    const k = runKPIs(hist, {
+      parked: sim.parkedTotal || 0, away: sim.turnedAway || 0, gaveUp: sim.gaveUp || 0,
+      coll: sim.collisions || 0, revenue: Math.round(sim.revenue || 0),
+    });
+    drawHistoryView();
+    const chartURI = hvCv && hist.length > 1 ? hvCv.toDataURL("image/png") : null;
+    const heatCv = buildHeatmapCanvas();
+    const heatURI = heatCv ? heatCv.toDataURL("image/png") : null;
+    const aiOut = document.getElementById("hv-ai-out");
+    const aiHTML = aiOut && !aiOut.hidden && aiOut.innerHTML && !/rc-msg/.test(aiOut.innerHTML.slice(0, 60)) ? aiOut.innerHTML : null;
+    const cmpOut = document.getElementById("hv-cmp-out");
+    const cmpHTML = cmpOut && !cmpOut.hidden && cmpOut.innerHTML ? cmpOut.innerHTML : null;
+    const bRows = (state.buildings || []).map((b, i) => {
+      const bta = Math.round((b.poly ? g.area(b.poly) : b.w * b.h) * (b.floors || 1));
+      const open = b.closed ? "Stängd" : ((b.openFrom != null ? b.openFrom : 0) + "–" + (b.openTo != null ? b.openTo : 24));
+      return "<tr><td>" + escapeHtml(b.name || "Byggnad " + (i + 1)) + "</td><td>" + bta.toLocaleString() + "</td><td>" +
+        Math.round((b.attract != null ? b.attract : 1) * 100) + "%</td><td>" + open + "</td><td>" + ((sim.visitTotals || {})[i] || 0) + "</td></tr>";
+    }).join("");
+    const kpi = (lbl, v) => "<div class='kpi'><div class='kv'>" + v + "</div><div class='kl'>" + lbl + "</div></div>";
+    const html = "<!doctype html><html lang='sv'><head><meta charset='utf-8'><title>Rapport — " + escapeHtml(currentName()) + "</title>" +
+      "<style>body{font:14px/1.5 system-ui,sans-serif;color:#0f1116;max-width:960px;margin:32px auto;padding:0 20px}" +
+      "h1{font-size:24px;margin-bottom:4px}h2{font-size:17px;margin:28px 0 8px}.sub{color:#6b7280}" +
+      ".kpis{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0}.kpi{border:1px solid #e2e5ea;border-radius:8px;padding:10px 16px;text-align:center}" +
+      ".kv{font-size:20px;font-weight:700}.kl{font-size:11px;color:#6b7280;text-transform:uppercase}" +
+      "img{max-width:100%;border:1px solid #e2e5ea;border-radius:8px}table{border-collapse:collapse;width:100%}" +
+      "td,th{padding:4px 10px 4px 0;text-align:left;border-bottom:1px solid #eef0f3}th{color:#6b7280;font-weight:600}" +
+      ".ai{background:#f7f8fb;border:1px solid #e2e5ea;border-radius:8px;padding:12px 16px}@media print{body{margin:10mm auto}}</style></head><body>" +
+      "<h1>Parkeringsrapport — " + escapeHtml(currentName()) + "</h1>" +
+      "<p class='sub'>Simulerad period: " + period + " · genererad " + new Date().toLocaleString("sv-SE") + " · Parkeringssimulator</p>" +
+      "<div class='kpis'>" + kpi("parkerade besök", k.parked) + kpi("avvisade", k.away) + kpi("gav upp", k.gaveUp) +
+      kpi("krockar", k.coll) + kpi("toppkö", k.peakQ) + kpi("snittkö", k.avgQ) + (sim.feePerH > 0 ? kpi("intäkt (kr)", k.revenue.toLocaleString()) : "") + "</div>" +
+      (chartURI ? "<h2>Förlopp över perioden</h2><img src='" + chartURI + "' alt='Historik'>" : "") +
+      (cmpHTML ? "<h2>Jämförelse</h2>" + cmpHTML : "") +
+      (heatURI ? "<h2>Periodheatmap</h2><img src='" + heatURI + "' alt='Heatmap'>" : "") +
+      "<h2>Byggnader</h2><table><tr><th>Namn</th><th>BTA m²</th><th>Attraktion</th><th>Öppet</th><th>Besök</th></tr>" + bRows + "</table>" +
+      (aiHTML ? "<h2>AI-analys</h2><div class='ai'>" + aiHTML + "</div>" : "") +
+      "</body></html>";
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    download("rapport-" + currentName() + ".html", URL.createObjectURL(blob), true);
+  }
+  { const bR = document.getElementById("hv-report"); if (bR) bR.addEventListener("click", exportReport); }
   // ---- AI analysis of the simulated PERIOD (hotspots named by landmark) ---
   function nearestLandmark(x, y) {
     let best = null, bd = Infinity;
@@ -1751,7 +1949,8 @@
       for (const s2 of hist) { if (s2.c > pc.c) pc = s2; if (s2.q > pq.q) pq = s2; if (s2.p > pp.p) pp = s2; }
       lines.push("Toppar: " + pc.c + " rullande (kl " + fmtClock(pc.h) + "), " + pp.p + " parkerade (kl " + fmtClock(pp.h) + "), " + pq.q + " i kö (kl " + fmtClock(pq.h) + ").");
     }
-    lines.push("Räknare: " + (sim.parkedTotal || 0) + " parkerade besök, " + (sim.turnedAway || 0) + " avvisade, " + (sim.gaveUp || 0) + " gav upp, " + (sim.collisions || 0) + " krockar, " + (sim.reroutes || 0) + " omplaneringar, " + (sim.settles || 0) + " platsbyten i kö.");
+    lines.push("Räknare: " + (sim.parkedTotal || 0) + " parkerade besök, " + (sim.turnedAway || 0) + " avvisade, " + (sim.gaveUp || 0) + " gav upp, " + (sim.collisions || 0) + " krockar, " + (sim.reroutes || 0) + " omplaneringar, " + (sim.settles || 0) + " platsbyten i kö." +
+      (sim.feePerH > 0 ? " Avgift " + sim.feePerH + " kr/h, intäkt " + Math.round(sim.revenue || 0) + " kr." : ""));
     const q = topCells(sim._queueGrid, 8, 5);
     if (q.length) lines.push("Största köområdena (tid ackumulerad): " + q.map((c) => "vid " + nearestLandmark(c.x, c.y) + " [" + Math.round(c.v / 60) + " min]").join("; ") + ".");
     const cf = topCells(sim._confPeriod, 4, 5);
@@ -2033,6 +2232,7 @@
         arrivalCurve: sim.arrivalCurve || null, clock: sim.hourNow ? +sim.hourNow().toFixed(2) : 8,
         dateStr: sim.dateStr || null, weekMult: sim.weekMult || null, monthMult: sim.monthMult || null,
         domMult: sim.domMult || null, stopDate: sim.stopDate || null, stopHour: sim.stopHour,
+        events: sim.events || null, feePerH: sim.feePerH || 0, lastRun: sim.lastRun || null,
         meanAggr: sim.meanAggr, meanCaution: sim.meanCaution, traitSpread: sim.traitSpread, allowOvertake: sim.allowOvertake,
       },
       map: (state.mapMode && state.map && state._anchor) ? {
@@ -2050,15 +2250,53 @@
     if (saved) { clearTimeout(setStatus._t); setStatus._t = setTimeout(() => el.classList.remove("show"), 1600); }
   }
   let dirty = false; // unflushed edits in THIS tab — gates the beforeunload save
+  // ---- undo/redo: snapshot of the state BEFORE each edit burst -------------
+  // Handlers mutate FIRST and call scheduleSave AFTER, so pushing the current
+  // state there would only ever capture post-edit states. Instead lastSnap
+  // always holds the last PERSISTED state; scheduleSave pushes THAT (deduped),
+  // so a whole slider drag collapses into exactly one undo step.
+  let lastSnap = null;
+  const undoStack = [], redoStack = [];
+  function undoPush() {
+    if (loadingProject || lastSnap == null) return;
+    if (undoStack[undoStack.length - 1] === lastSnap) return;
+    undoStack.push(lastSnap);
+    if (undoStack.length > 30) undoStack.shift();
+    redoStack.length = 0;
+  }
+  function undoClear() { undoStack.length = 0; redoStack.length = 0; lastSnap = null; }
+  function doUndo() {
+    if (!undoStack.length) return;
+    redoStack.push(JSON.stringify(serializeProject()));
+    const prev = undoStack.pop();
+    try { applyPlan(JSON.parse(prev)); saveProject(); lastSnap = prev; setStatus("Ångrade", true); } catch (e) { console.warn("[undo]", e); }
+  }
+  function doRedo() {
+    if (!redoStack.length) return;
+    undoStack.push(JSON.stringify(serializeProject()));
+    const nxt = redoStack.pop();
+    try { applyPlan(JSON.parse(nxt)); saveProject(); lastSnap = nxt; setStatus("Gjorde om", true); } catch (e) { console.warn("[redo]", e); }
+  }
+  window.addEventListener("keydown", (e) => {
+    if (!((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z"))) return;
+    const t = e.target, tag = t && t.tagName;
+    // text fields keep their native undo; sliders/checkboxes shouldn't block ours
+    const isText = (tag === "INPUT" && !/^(range|checkbox|radio)$/.test(t.type || "")) || tag === "TEXTAREA" || (t && t.isContentEditable);
+    if (isText) return;
+    e.preventDefault();
+    if (e.shiftKey) doRedo(); else doUndo();
+  });
   function saveProject() {
     if (loadingProject) return; // a project is mid-load — don't persist its transient state over the good save
     const r = loadReg(); if (!r.current) return;
-    try { localStorage.setItem(projKey(r.current), JSON.stringify(serializeProject())); } catch (e) { setStatus("Kunde inte spara", false); return; }
+    let json;
+    try { json = JSON.stringify(serializeProject()); localStorage.setItem(projKey(r.current), json); } catch (e) { setStatus("Kunde inte spara", false); return; }
+    lastSnap = json; // the persisted state = the next edit burst's pre-state
     dirty = false;
     const it = r.items.find((x) => x.id === r.current); if (it) { it.updated = Date.now(); saveReg(r); }
     setStatus("✓ Sparat", true);
   }
-  function scheduleSave() { if (loadingProject) return; dirty = true; setStatus("Sparar…", false); clearTimeout(saveTimer); saveTimer = setTimeout(saveProject, 700); }
+  function scheduleSave() { if (loadingProject) return; undoPush(); dirty = true; setStatus("Sparar…", false); clearTimeout(saveTimer); saveTimer = setTimeout(saveProject, 700); }
 
   function refreshProjectSelect() {
     const r = loadReg(), sel = document.getElementById("project-select");
@@ -2067,6 +2305,7 @@
     document.getElementById("project-name").value = currentName();
   }
   function loadBlank() {
+    undoClear();
     pauseTraffic();
     if (state.mapMode) setBasemap("styled");
     state.site = defaultSite();
@@ -2076,6 +2315,9 @@
     sim.arrivalCurve = defaultCurve(40); sim.clockStart = ((8 - sim.t / 60) % 24 + 24) % 24; // fresh day profile per new project
     sim.weekMult = defaultWeek(); sim.monthMult = defaultMonth(); sim.domMult = defaultDom();
     sim.stopDate = null; sim.stopHour = null; updateStopUI();
+    sim.events = null; sim.feePerH = 0; sim.revenue = 0; sim.lastRun = null;
+    setSlider("fee", "fee-val", 0); renderEvents();
+    hvCompare = null; { const hvSel = document.getElementById("hv-compare"); if (hvSel) hvSel.value = ""; }
     sim.dateStr = new Date().toISOString().slice(0, 10);
     sim.history = []; sim._histT = null;
     segSetActive("base-seg", "styled"); segSetActive("tool-seg", "select");
@@ -2087,8 +2329,9 @@
     syncSelectionUI(); regen(); resize(true); updateTrafficStats(); requestDraw();
   }
   function loadProjectData(id) {
+    undoClear(); // Ctrl+Z across projects would apply A's blob onto B — corruption
     const raw = localStorage.getItem(projKey(id));
-    if (raw) { try { applyPlan(JSON.parse(raw)); return; } catch (e) { console.warn("[load]", e); } }
+    if (raw) { try { applyPlan(JSON.parse(raw)); lastSnap = raw; return; } catch (e) { console.warn("[load]", e); } }
     loadBlank();
   }
   function switchProject(id) {
@@ -2157,7 +2400,7 @@
     if (!f) return;
     const reader = new FileReader();
     reader.onload = () => {
-      try { applyPlan(JSON.parse(reader.result)); }
+      try { undoPush(); applyPlan(JSON.parse(reader.result)); saveProject(); }
       catch (err) { console.error("[import]", err); const box = document.getElementById("report"); box.hidden = false; box.innerHTML = `<p class="rc-msg">Kunde inte läsa filen: ${err.message}</p>`; }
       importFile.value = "";
     };
@@ -2204,6 +2447,13 @@
     } else sim.domMult = defaultDom();
     sim.dateStr = t.dateStr || new Date().toISOString().slice(0, 10);
     sim.stopDate = t.stopDate || null; sim.stopHour = t.stopHour != null ? t.stopHour : null;
+    sim.events = Array.isArray(t.events) ? t.events.slice() : null;
+    sim.feePerH = t.feePerH != null ? t.feePerH : 0;
+    sim.revenue = 0;
+    sim.lastRun = t.lastRun || null; // UNCONDITIONAL — pauseTraffic during load must not leak the old project's run
+    setSlider("fee", "fee-val", sim.feePerH);
+    renderEvents();
+    hvCompare = null; const hvSel = document.getElementById("hv-compare"); if (hvSel) hvSel.value = "";
     updateStopUI();
     sim.history = []; sim._histT = null;
     if (t.dwellMin != null) sim.dwellMin = t.dwellMin;

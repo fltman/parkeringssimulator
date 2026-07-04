@@ -612,6 +612,8 @@
       domMult: null,        // 31 day-of-month multipliers (payday bump etc.; null = app default)
       stopDate: null,       // "YYYY-MM-DD" — sim pauses itself when reached...
       stopHour: null,       // ...at this hour (float). null = run forever
+      events: null,         // one-off spikes: [{date:"YYYY-MM-DD", from:h, to:h, mult:x, label}]
+      feePerH: 0,           // parking fee (kr/h of CLOCK time) — dampens demand, earns revenue
       // Driver-population traits (means in [0,1]) + how much they vary per car.
       meanAggr: 0.5, meanCaution: 0.4, traitSpread: 0.35, allowOvertake: true,
       cars: [], peds: [], net: null, selectedCar: null,
@@ -1157,6 +1159,7 @@
       if (!s) { car._dead = true; return; } // stall vanished (layout changed)
       s.occupied = true; s.color = car.color;
       car.state = "parked";
+      car._parkedAt = sim.t; // paid-time start (revenue on departure)
       const search = sim.t - car.spawnT;
       sim.recentSearch.push(search);
       if (sim.recentSearch.length > 40) sim.recentSearch.shift();
@@ -1188,6 +1191,8 @@
         car.departAt = sim.t + 60;
         return;
       }
+      // Parking revenue: paid time in CLOCK hours = sim-seconds / 60.
+      if (sim.feePerH > 0 && car._parkedAt != null) sim.revenue = (sim.revenue || 0) + ((sim.t - car._parkedAt) / 60) * sim.feePerH;
       // Free the painted spot as it pulls out, but HOLD the claim until the
       // car has cleared the stall mouth (released in the drive loop) — an
       // arrival must not nose into a stall that still has a car in it.
@@ -1233,6 +1238,15 @@
         // trickle shows up (staff, confused people, people who can't read signs).
         const hArr = sim.hourNow();
         let rateNow = curveAt(hArr) * sim.calMult().total;
+        // One-off events (concert, match day): multiply while the clock is
+        // inside a matching date + hour window.
+        if (sim.events && sim.events.length) {
+          for (const ev of sim.events) {
+            if (ev.date === sim.dateStr && hArr >= (ev.from || 0) && hArr < (ev.to != null ? ev.to : 24)) rateNow *= (ev.mult != null ? ev.mult : 1);
+          }
+        }
+        // Parking fee dampens demand (~-50% at 25 kr/h).
+        if (sim.feePerH > 0) rateNow *= 1 / (1 + sim.feePerH * 0.04);
         const hEta = estArrivalHour();
         if (state.buildings.length && !state.buildings.some((x) => PS.buildingOpen(x, hEta))) rateNow *= 0.05;
         sim._rateNow = rateNow;
@@ -1753,7 +1767,7 @@
       sim._confPeriod = new Map();
       sim._periodStart = { d: sim.dateStr, h: sim.hourNow ? sim.hourNow() : 8 };
       if (state.parking) for (const s of state.parking.stalls) s.reserved = false;
-      sim.peds = []; sim.conflict.clear(); sim._crashPts = []; sim.entCount = null; sim._gateAcc = null; sim._gateWait = null; sim.visitTotals = {}; sim.reroutes = 0; sim.settles = 0; sim.diverted = 0;
+      sim.peds = []; sim.conflict.clear(); sim._crashPts = []; sim.entCount = null; sim._gateAcc = null; sim._gateWait = null; sim.visitTotals = {}; sim.reroutes = 0; sim.settles = 0; sim.diverted = 0; sim.revenue = 0;
     };
     // Force a car to stall/crash: it stops and blocks its lane for a while.
     sim.crash = function (car) {

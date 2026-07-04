@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Parkeringssimulator</title>
-    <link rel="stylesheet" href="css/styles.css?v=105" />
+    <link rel="stylesheet" href="css/styles.css?v=106" />
   </head>
   <body>
     <div id="app">
@@ -37,6 +37,8 @@
             <div class="hv-head">
               <h3>Historik</h3>
               <span class="hv-info" id="hv-info"></span>
+              <select id="hv-compare" title="Jämför med en annan sparad körning"><option value="">Jämför med…</option></select>
+              <button id="hv-report" class="ghost">📄 Rapport</button>
               <button id="hv-ai" class="ghost">✨ AI-analys</button>
               <button id="hv-png" class="ghost">PNG</button>
               <button id="hv-csv" class="ghost">CSV</button>
@@ -50,6 +52,7 @@
               <span class="hv-info">Grå band = natt (22–06) · streck = midnatt · håll muspekaren över för avläsning</span>
             </div>
             <canvas id="hv-canvas"></canvas>
+            <div id="hv-cmp-out" hidden style="border-top:1px solid #e2e5ea;margin-top:8px;padding-top:8px;font-size:13px"></div>
             <div id="hv-ai-out" hidden style="max-height:38%;overflow:auto;border-top:1px solid #e2e5ea;margin-top:8px;padding-top:8px;font-size:13px;line-height:1.5"></div>
           </div>
         </div>
@@ -249,6 +252,17 @@
                 <p class="hint">Dra i staplarna: t.ex. måndag ×0.5, fredag ×1.5, december julhandel, januari fattigast. Skala 0–3×.</p>
               </div>
               <div class="field">
+                <label>Händelser (engångspikar)</label>
+                <div id="ev-list"></div>
+                <div class="row"><button id="ev-add" class="ghost">＋ Händelse</button></div>
+                <p class="hint">T.ex. konsert eller matchdag: datum + tidsfönster + faktor som multipliceras ovanpå kurvorna.</p>
+              </div>
+              <div class="field">
+                <label>Parkeringsavgift: <span id="fee-val">0</span> kr/h</label>
+                <input type="range" id="fee" min="0" max="50" step="1" value="0" />
+                <p class="hint">Avgift dämpar efterfrågan (~halverad vid 25 kr/h) och ger intäkt per betald timme.</p>
+              </div>
+              <div class="field">
                 <label>Kör till (stopptid): <span id="stop-label">–</span></label>
                 <div class="row">
                   <input type="date" id="stop-date" />
@@ -299,6 +313,7 @@
                 <div><span class="tv" id="t-search">0 s</span><span class="tl">snitt söktid</span></div>
                 <div><span class="tv" id="t-coll">0</span><span class="tl">krockar</span></div>
                 <div><span class="tv" id="t-away">0</span><span class="tl">avvisade</span></div>
+                <div><span class="tv" id="t-rev">0</span><span class="tl">kr intäkt</span></div>
               </div>
               <p class="hint">Röda stråk = köer/flaskhalsar. IN = infart, UT = utfart. Klicka en bil för att ändra dess förare.</p>
               <label class="check"><input type="checkbox" id="chk-heat" checked /> Visa trafikvärme</label>
@@ -389,11 +404,11 @@
       </div>
     </div>
 
-    <script src="js/geometry.js?v=105"></script>
-    <script src="js/parking.js?v=105"></script>
-    <script src="js/traffic.js?v=105"></script>
-    <script src="js/render.js?v=105"></script>
-    <script src="js/report.js?v=105"></script>
-    <script src="js/app.js?v=105"></script>
+    <script src="js/geometry.js?v=106"></script>
+    <script src="js/parking.js?v=106"></script>
+    <script src="js/traffic.js?v=106"></script>
+    <script src="js/render.js?v=106"></script>
+    <script src="js/report.js?v=106"></script>
+    <script src="js/app.js?v=106"></script>
   </body>
 </html>

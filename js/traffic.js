@@ -651,8 +651,21 @@
     function pathToExit(stallIdx) {
       const net = sim.net, sa = net.stallAccess[stallIdx];
       if (!sa || !net.exits.length) return null;
+      // Congestion-aware exit pick: weight the static distance by the worst
+      // current congestion on edges touching each exit, so departers spread to
+      // a clear gate instead of all funnelling to the geometrically nearest
+      // one (same 6x factor dijkstraCong uses). Scans BOTH edge directions —
+      // adj[] only lists outgoing, which misses the inbound queue on one-ways.
+      const exitCong = (exN) => {
+        let cg = 0;
+        for (const e of net.edges) if (e.a === exN || e.b === exN) cg = Math.max(cg, e.cong || 0);
+        return cg;
+      };
       let best = -1, bc = Infinity;
-      for (let k = 0; k < net.exits.length; k++) { const c = costTo(stallIdx, net.fromOut[k]); if (c < bc) { bc = c; best = k; } }
+      for (let k = 0; k < net.exits.length; k++) {
+        const c = costTo(stallIdx, net.fromOut[k]) * (1 + 6 * exitCong(net.exits[k]));
+        if (c < bc) { bc = c; best = k; }
+      }
       if (best < 0) return null;
       const dij = net.fromOut[best]; // dij.dist = distance TO the exit (respects one-way)
       const ap = approachFor(net, sa, dij.dist);
@@ -912,7 +925,9 @@
         // Only a car actually stopped/queued at the gate blocks a fresh spawn —
         // a car merely driving PAST (e.g. a gate on a through-road) shouldn't
         // starve that gate, or arrivals can't spread evenly across entrances.
-        if (Math.hypot(car.x - eN.x, car.y - eN.y) < CAR_LEN + MIN_GAP + 1 && (car.v || 0) < 1.5) return true;
+        const dGate = Math.hypot(car.x - eN.x, car.y - eN.y);
+        if (dGate < CAR_LEN + 0.5) return true; // physically ON the gate mouth — never spawn inside a car, rolling or not
+        if (dGate < CAR_LEN + MIN_GAP + 1 && (car.v || 0) < 1.5) return true;
       }
       return false;
     }
@@ -920,20 +935,49 @@
     // stream — see the arrival loop — so demand is spread evenly across gates).
     // Returns true if consumed (spawned or turned away), false if the gate is
     // momentarily blocked and the car must keep waiting on the street.
+    // Congestion-aware arrival field: when the lot is jammed, route fresh
+    // arrivals (and their stall choice) AROUND the jam instead of feeding it
+    // head-on with the static shortest-distance field. Cached per gate on the
+    // current net (a rebuild discards it), refreshed at most every 2 sim-s
+    // behind the shared wall-clock Dijkstra throttle; calm lots pay nothing.
+    function arrivalField(k) {
+      const net = sim.net;
+      if ((sim._maxCong || 0) < 0.3) return net.fromIn[k];
+      if (!net._congIn) net._congIn = {};
+      const c = net._congIn[k];
+      if (c && sim.t - c.at < 2) return c.field;
+      if (performance.now() - (sim._lastRerouteWall || -1e9) < 100) return c ? c.field : net.fromIn[k];
+      sim._lastRerouteWall = performance.now();
+      const field = dijkstraCong(net.entrances[k]);
+      net._congIn[k] = { field, at: sim.t };
+      return field;
+    }
+    // Can gate m serve an arrival for destB right now? Returns the spawn plan.
+    function planFromGate(m, destB) {
+      const dij = arrivalField(m);
+      const stallIdx = chooseStall(destB, dij);
+      if (stallIdx < 0) return null;                     // lot genuinely full
+      if (!isFinite(costTo(stallIdx, dij))) return null; // no free stall reachable from m
+      const path = pathToStall(stallIdx, dij, sim.net.entrances[m]);
+      if (!path || !path.length) return null;
+      return { stallIdx, path };
+    }
     function spawnCarAt(k) {
       const ent = sim.net.entrances;
-      const dij = sim.net.fromIn[k];
       const destB = chooseDestBuilding();
-      const stallIdx = chooseStall(destB, dij);
-      if (stallIdx < 0) { sim.turnedAway++; return true; }        // lot full
-      if (!isFinite(costTo(stallIdx, dij))) { sim.turnedAway++; return true; } // unreachable from this gate
-      if (gateBlocked(ent[k])) return false;                      // this gate's mouth is occupied — wait
-      const path = pathToStall(stallIdx, dij, ent[k]);
-      if (!path || !path.length) { sim.turnedAway++; return true; }
+      let m = k, plan = planFromGate(k, destB);
+      if (!plan) {
+        // This gate can't reach any free stall — the driver arrives via
+        // another gate that can. Only when NO gate reaches a free stall is
+        // the arrival a genuine turn-away (what the analyst assumes it means).
+        for (let j = 0; j < ent.length && !plan; j++) if (j !== k) { plan = planFromGate(j, destB); if (plan) m = j; }
+        if (!plan) { sim.turnedAway++; return true; }
+      }
+      if (gateBlocked(ent[m])) return false; // the chosen gate's mouth is occupied — wait
       if (!sim.entCount || sim.entCount.length !== ent.length) sim.entCount = new Array(ent.length).fill(0);
-      sim.entCount[k]++;
-      state.parking.stalls[stallIdx].reserved = true;
-      const car = { kind: "car", state: "toStall", stallIdx, path, segIndex: 0, segT: 0, v: 0, color: carColor(), spawnT: sim.t, traits: makeTraits(), stuck: 0, gateIn: k, destB };
+      sim.entCount[m]++;
+      state.parking.stalls[plan.stallIdx].reserved = true;
+      const car = { kind: "car", state: "toStall", stallIdx: plan.stallIdx, path: plan.path, segIndex: 0, segT: 0, v: 0, color: carColor(), spawnT: sim.t, traits: makeTraits(), stuck: 0, gateIn: m, destB };
       setPose(car);
       sim.cars.push(car);
       return true;
@@ -966,9 +1010,19 @@
       const s = state.parking.stalls[car.stallIdx];
       if (!s) { car._dead = true; return; } // stall vanished (layout changed)
       const path = pathToExit(car.stallIdx);
-      s.occupied = false; s.reserved = false; // free the spot as it pulls out
-      if (!path || !path.length) { car._dead = true; return; }
+      if (!path || !path.length) {
+        // No way out right now (transient blockage / disconnected section):
+        // stay parked and retry in a minute instead of evaporating in place —
+        // parked cars used to silently blink out of existence here.
+        car.departAt = sim.t + 60;
+        return;
+      }
+      // Free the painted spot as it pulls out, but HOLD the claim until the
+      // car has cleared the stall mouth (released in the drive loop) — an
+      // arrival must not nose into a stall that still has a car in it.
+      s.occupied = false; s.reserved = true;
       car.state = "toExit"; car.path = path; car.segIndex = 0; car.segT = 0; car.v = 0;
+      car.crawl = 0; // impatience from the inbound leg must not carry across the dwell
       setPose(car);
     }
 
@@ -993,10 +1047,23 @@
       const nEnt = (sim.net && sim.net.entrances.length) || 0;
       if (nEnt) {
         if (!sim._gateAcc || sim._gateAcc.length !== nEnt) sim._gateAcc = new Array(nEnt).fill(0);
+        if (!sim._gateWait || sim._gateWait.length !== nEnt) sim._gateWait = new Array(nEnt).fill(0);
         const per = (sim.arrivalRate / 60) * dt / nEnt;
         for (let k = 0; k < nEnt; k++) {
           sim._gateAcc[k] = Math.min(4, sim._gateAcc[k] + per);
-          while (sim._gateAcc[k] >= 1) { if (spawnCarAt(k)) sim._gateAcc[k] -= 1; else break; }
+          while (sim._gateAcc[k] >= 1) { if (spawnCarAt(k)) { sim._gateAcc[k] -= 1; sim._gateWait[k] = 0; } else break; }
+          if (sim._gateAcc[k] >= 1) {
+            // Demand pending at a physically blocked gate: after ~10 s divert
+            // the driver to another usable gate instead of letting this gate's
+            // share of the arrivals silently evaporate.
+            sim._gateWait[k] += dt;
+            if (sim._gateWait[k] > 10) {
+              for (let j2 = 0; j2 < nEnt; j2++) {
+                if (j2 === k) continue;
+                if (spawnCarAt(j2)) { sim._gateAcc[k] -= 1; sim._gateWait[k] = 0; sim.diverted = (sim.diverted || 0) + 1; break; }
+              }
+            }
+          }
         }
       }
 
@@ -1060,6 +1127,13 @@
       const walkers = sim.peds.filter((p) => p.phase !== "inBuilding");
       for (const car of sim.cars) {
         if (car.state !== "toStall" && car.state !== "toExit") continue;
+        // Departer has cleared its stall mouth → release the claim held since
+        // startLeaving (arrivals may now take the spot).
+        if (car.state === "toExit" && car.stallIdx >= 0 && car.segIndex > 0) {
+          const exSt = state.parking.stalls[car.stallIdx];
+          if (exSt) exSt.reserved = false;
+          car.stallIdx = -1;
+        }
         if (car.crashed) { car.v = 0; continue; } // stuck at the scene
         const li = car._li;
         const tr = car.traits;
@@ -1117,8 +1191,9 @@
           const followGap = Math.max(gapMin, (sim.followSec || 0) * (car.v || 0));
           if (leaderGap < Infinity) move = Math.min(move, Math.max(0, leaderGap - CAR_LEN - followGap));
           // A stressed, aggressive, stuck driver may pull out to overtake.
-          if (sim.allowOvertake && li.laneKey != null && li.edgeId >= 0 && (car.stuck || 0) > 3 &&
-              car.v < 0.3 && tr.aggr > 0.62 && tr.stress > 0.55 && leader && leaderGap < CAR_LEN + 4 &&
+          if (sim.allowOvertake && li.laneKey != null && li.edgeId >= 0 &&
+              ((car.stuck || 0) > 3 || (car.crawl || 0) > 8) &&
+              car.v < Math.max(0.3, 0.35 * vm) && tr.aggr > 0.62 && tr.stress > 0.55 && leader && leaderGap < CAR_LEN + 4 &&
               li.remaining > CAR_LEN * 2 && sim.rng() < dt * 0.6) {
             if (oncoming(li).gap > 16) { car.overtaking = true; car.otLeaderQ = leader._li.q; }
           }
@@ -1164,12 +1239,16 @@
         }
 
         // Yield to pedestrians crossing ahead — stop rather than run them over.
+        // But after a few seconds crawling behind a walker headed the same way,
+        // squeeze past with care (crash-scene speed) — cars used to trail a
+        // single pedestrian at walking pace for the length of the lot.
         const hx = car.hx || 0, hy = car.hy || 0;
         for (const ped of walkers) {
           const rx = ped.x - car.x, ry = ped.y - car.y;
           const ahead = rx * hx + ry * hy;
           if (ahead > 0 && ahead < 7 && Math.abs(-rx * hy + ry * hx) < 2.2) {
-            move = Math.min(move, Math.max(0, ahead - 2.6));
+            if ((car.crawl || 0) > 5) move = Math.min(move, Math.max(1.4 * dt, ahead - 2.6));
+            else move = Math.min(move, Math.max(0, ahead - 2.6));
           }
         }
 
@@ -1243,17 +1322,21 @@
         const latTarget = car.overtaking ? -OT_OFFSET : (onLane ? HALF_LANE : 0);
         car.lat = (car.lat || 0) + (latTarget - (car.lat || 0)) * Math.min(1, dt * 4);
 
-        // Dynamic stress: builds while crawling/stopped, eases when rolling.
-        if (car.v < 0.6) { tr.stress = Math.min(1, tr.stress + dt * (0.02 + 0.05 * tr.stressProne)); car.stuck = (car.stuck || 0) + dt; }
-        else { tr.stress = Math.max(0, tr.stress - dt * 0.05); car.stuck = 0; }
-        // Crawl-impatience: a queue rarely stands fully still — a conga line
-        // rolls at half cruising speed, which never trips the stuck-timer (it
-        // resets at 0.6 m/s). Count time spent below 60% of cruise instead,
-        // with hysteresis: it only starts recovering above 75% of cruise, so
-        // stop-and-go queues keep accruing.
+        // Standstill timer (give-up/overtake semantics): absolute test.
+        if (car.v < 0.6) car.stuck = (car.stuck || 0) + dt; else car.stuck = 0;
+        // Stress + crawl-impatience build on RELATIVE speed with hysteresis:
+        // a queue rarely stands fully still — a conga line rolls at half
+        // cruising speed, which never tripped the old absolute 0.6 m/s tests
+        // (drivers stayed serenely calm through ten-minute rolling jams).
+        // Recovery only starts above 75% of cruise, so stop-and-go keeps accruing.
         const v0 = sim.speedKmh / 3.6;
-        if (car.v < 0.6 * v0) car.crawl = (car.crawl || 0) + dt;
-        else if (car.v > 0.75 * v0) car.crawl = Math.max(0, (car.crawl || 0) - dt * 2);
+        if (car.v < 0.6 * v0) {
+          tr.stress = Math.min(1, tr.stress + dt * (0.02 + 0.05 * tr.stressProne));
+          car.crawl = (car.crawl || 0) + dt;
+        } else if (car.v > 0.75 * v0) {
+          tr.stress = Math.max(0, tr.stress - dt * 0.05);
+          car.crawl = Math.max(0, (car.crawl || 0) - dt * 2);
+        }
 
         // Re-planning as a PROACTIVE driver decision: react to congestion on the
         // road AHEAD (current + next edge), independent of the car's own speed —
@@ -1273,12 +1356,13 @@
         // Global throttle is WALL-clock (not sim-time): at tempo 20 a sim-time
         // gate lets the O(n²) dijkstraCong fire nearly every frame — exactly
         // when the user is watching a jam. ≤10 replans/s regardless of tempo.
-        if (!car.crashed && congAhead > congGate &&
+        if (!car.crashed &&
+            (congAhead > congGate || (car.state === "toExit" && (car.crawl || 0) > 15)) &&
             li.laneKey != null && li.endNode != null && li.endNode >= 0 &&
             (performance.now() - (sim._lastRerouteWall || -1e9) >= 100) &&
             (sim.t - (car._reroutedAt || -1e9)) > rerouteCooldown) {
           car._reroutedAt = sim.t; sim._lastRerouteWall = performance.now(); sim._rerouteAttempts = (sim._rerouteAttempts || 0) + 1;
-          if (reroute(car)) { car.stuck = 0; car._didReroute = true; sim.reroutes = (sim.reroutes || 0) + 1; }
+          if (reroute(car)) { car.stuck = 0; car.crawl = 0; car._didReroute = true; sim.reroutes = (sim.reroutes || 0) + 1; }
         }
 
         // Settling: a driver crawling in queue toward its assigned stall gives
@@ -1299,8 +1383,8 @@
 
         // Frustration: stuck far too long → give up and vanish (self-heals any
         // gridlock, and keeps a fully jammed lot from locking forever).
-        if (!car.crashed && car.stuck > 120) {
-          if (car.state === "toStall" && state.parking.stalls[car.stallIdx]) state.parking.stalls[car.stallIdx].reserved = false;
+        if (!car.crashed && (car.stuck > 120 || (car.crawl || 0) > 240)) {
+          if (car.stallIdx >= 0 && state.parking.stalls[car.stallIdx]) state.parking.stalls[car.stallIdx].reserved = false;
           car._dead = true;
           sim.gaveUp = (sim.gaveUp || 0) + 1;
           continue;
@@ -1364,19 +1448,21 @@
         a.sumV += car.v; a.n += 1; acc.set(edgeId, a);
       }
       const vm = vmax();
-      let worst = -1, worstC = 0;
+      let worst = -1, worstC = 0, maxC = 0;
       for (const e of sim.net.edges) {
         const a = acc.get(e.id);
         const inst = a ? Math.max(0, 1 - a.sumV / a.n / vm) : 0;
         e.load = a ? a.n : 0;
         e.cong = e.cong * 0.88 + inst * 0.12;
+        if (e.cong > maxC) maxC = e.cong;
         if (e.load > 0 && e.cong > worstC) { worstC = e.cong; worst = e.id; }
       }
+      sim._maxCong = maxC; // cheap global jam indicator (gates the cong-aware arrival fields)
 
       let circ = 0, parked = 0, queue = 0;
       for (const car of sim.cars) {
         if (car.state === "parked") parked++;
-        else if (car.state === "toStall" || car.state === "toExit") { circ++; if (car.v < 0.4) queue++; }
+        else if (car.state === "toStall" || car.state === "toExit") { circ++; if (car.v < 0.4 || (car.crawl || 0) > 3) queue++; }
       }
       const total = state.parking.stalls.length || 1;
       sim.stats = {
@@ -1425,7 +1511,7 @@
       // parked cars (their departAt stayed pinned at Infinity forever).
       sim.cars = []; sim.selectedCar = null;
       if (state.parking) for (const s of state.parking.stalls) s.reserved = false;
-      sim.peds = []; sim.conflict.clear(); sim._crashPts = []; sim.entCount = null; sim._gateAcc = null; sim.visitTotals = {}; sim.reroutes = 0;
+      sim.peds = []; sim.conflict.clear(); sim._crashPts = []; sim.entCount = null; sim._gateAcc = null; sim._gateWait = null; sim.visitTotals = {}; sim.reroutes = 0; sim.settles = 0; sim.diverted = 0;
     };
     // Force a car to stall/crash: it stops and blocks its lane for a while.
     sim.crash = function (car) {

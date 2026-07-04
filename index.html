@@ -95,7 +95,7 @@
                   <button data-v="round">Rondell</button>
                 </div>
               </div>
-              <p class="hint">Väg / Sektion: klicka ut ankarpunkter, dubbelklick eller Enter avslutar (klicka första punkten för att stänga). Rondell: dra. Markera en yta för att dra dess ankarpunkter; dubbelklick på en kant lägger till en ny punkt. Vinkel/riktning/grönska ställs per yta under "Vald sektion".</p>
+              <p class="hint">Väg / Sektion: klicka ut ankarpunkter, dubbelklick eller Enter avslutar (klicka första punkten för att stänga). Rondell: dra. Markera en yta för att dra dess ankarpunkter; dubbelklick på en kant lägger till en ny punkt. Vinkel/riktning/grönska ställs per yta under "Vald sektion". Delete tar bort markerat objekt, Esc avbryter ritning.</p>
               <div class="row"><button id="btn-trace" class="ghost">🗺️ Trace från kartan</button></div>
               <p class="hint" id="trace-status">I kartläge: rita en yta så hämtas verkliga byggnader och vägar därifrån (OpenStreetMap).</p>
               <div class="row"><button id="btn-clear-layout" class="ghost">Rensa layout</button></div>
@@ -178,6 +178,7 @@
                 <button id="btn-traffic" class="primary">▶ Starta trafik</button>
                 <button id="btn-treset" class="ghost">Nollställ</button>
               </div>
+              <p class="hint" id="sim-hint" hidden></p>
               <div class="tstats">
                 <div><span class="tv" id="t-circ">0</span><span class="tl">rullande</span></div>
                 <div><span class="tv" id="t-park">0</span><span class="tl">parkerade</span></div>
@@ -275,11 +276,11 @@
       </div>
     </div>
 
-    <script src="js/geometry.js?v=81"></script>
-    <script src="js/parking.js?v=81"></script>
-    <script src="js/traffic.js?v=81"></script>
-    <script src="js/render.js?v=81"></script>
-    <script src="js/report.js?v=81"></script>
-    <script src="js/app.js?v=81"></script>
+    <script src="js/geometry.js?v=82"></script>
+    <script src="js/parking.js?v=82"></script>
+    <script src="js/traffic.js?v=82"></script>
+    <script src="js/render.js?v=82"></script>
+    <script src="js/report.js?v=82"></script>
+    <script src="js/app.js?v=82"></script>
   </body>
 </html>

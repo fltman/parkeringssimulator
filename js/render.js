@@ -149,19 +149,19 @@
     ctx.strokeStyle = COLORS.stripe;
     ctx.lineWidth = Math.max(0.6, 1.1 * cam.scale);
     ctx.lineCap = "round";
+    // One path + one stroke for ALL stalls (identical style) — per-stall
+    // stroke() was 2500+ GPU flushes per frame on a big site. The w2s math is
+    // inlined to avoid four array allocations per stall.
+    const sc = cam.scale, tx = cam.tx, ty = cam.ty;
+    ctx.beginPath();
     for (const s of stalls) {
       const c = s.corners; // 0 aisle-left, 1 aisle-right, 2 back-right, 3 back-left
-      const p0 = PS.w2s(cam, c[0][0], c[0][1]);
-      const p1 = PS.w2s(cam, c[1][0], c[1][1]);
-      const p2 = PS.w2s(cam, c[2][0], c[2][1]);
-      const p3 = PS.w2s(cam, c[3][0], c[3][1]);
-      ctx.beginPath();
-      ctx.moveTo(p0[0], p0[1]); // left side (aisle -> back)
-      ctx.lineTo(p3[0], p3[1]);
-      ctx.lineTo(p2[0], p2[1]); // back
-      ctx.lineTo(p1[0], p1[1]); // right side (back -> aisle)
-      ctx.stroke();
+      ctx.moveTo(c[0][0] * sc + tx, c[0][1] * sc + ty); // left side (aisle -> back)
+      ctx.lineTo(c[3][0] * sc + tx, c[3][1] * sc + ty);
+      ctx.lineTo(c[2][0] * sc + tx, c[2][1] * sc + ty); // back
+      ctx.lineTo(c[1][0] * sc + tx, c[1][1] * sc + ty); // right side (back -> aisle)
     }
+    ctx.stroke();
     ctx.restore();
   }
 
@@ -242,7 +242,7 @@
         const c = g.centroid(b.poly), cs = PS.w2s(cam, c[0], c[1]);
         const gfa = Math.round(g.area(b.poly) * (b.floors || 1));
         ctx.fillStyle = "rgba(40,50,40,0.85)"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
-        ctx.font = "600 12px system-ui, sans-serif"; ctx.fillText(b.name || "Retail", cs[0], cs[1] - 8);
+        ctx.font = "600 12px system-ui, sans-serif"; ctx.fillText(b.name || "Byggnad", cs[0], cs[1] - 8);
         ctx.font = "11px system-ui, sans-serif"; ctx.fillText("BTA " + gfa.toLocaleString() + " m²", cs[0], cs[1] + 8);
         if (nv > 0 || tv > 0) drawVisitorBadge(ctx, cs[0], cs[1] - 24, nv, tv);
         continue;
@@ -261,7 +261,7 @@
       ctx.fillStyle = "rgba(40,50,40,0.85)";
       ctx.textAlign = "center"; ctx.textBaseline = "middle";
       ctx.font = "600 12px system-ui, sans-serif";
-      ctx.fillText(b.name || "Retail", 0, -8);
+      ctx.fillText(b.name || "Byggnad", 0, -8);
       ctx.font = "11px system-ui, sans-serif";
       ctx.fillText("BTA " + gfa.toLocaleString() + " m²", 0, 8);
       ctx.restore();
@@ -419,7 +419,9 @@
     const al = state.parking && state.parking.aisleLines;
     if (al && al.length) {
       ctx.strokeStyle = "rgba(255,255,255,0.22)"; ctx.lineWidth = Math.max(1, 1 * cam.scale);
-      for (const ln of al) { const a = PS.w2s(cam, ln[0][0], ln[0][1]), b = PS.w2s(cam, ln[1][0], ln[1][1]); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); }
+      ctx.beginPath(); // one path + one stroke for all ladder lines (same style)
+      for (const ln of al) { const a = PS.w2s(cam, ln[0][0], ln[0][1]), b = PS.w2s(cam, ln[1][0], ln[1][1]); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); }
+      ctx.stroke();
     }
     ctx.setLineDash([]);
     // draft feedback while drawing
@@ -560,6 +562,25 @@
     if (PS.drawHandles) PS.drawHandles(ctx, cam, state);
     if (state._analysisWorst) drawAnalysisMarker(ctx, cam, state._analysisWorst);
     if (state.showDims && !manual) drawDims(ctx, cam, state.site);
+
+    // Empty-state hint: the app opens as a blank parcel with all guidance
+    // buried in the panel. Until the first element is drawn (and no draft is
+    // in progress), show a "start here" line centred on the canvas.
+    const empty = manual && !state._draft &&
+      !(state.roads || []).length && !(state.sections || []).length &&
+      !(state.buildings || []).length && !(state.gates || []).length &&
+      !(state.roundabouts || []).length;
+    if (empty) {
+      ctx.save();
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.font = "600 17px system-ui, sans-serif";
+      ctx.fillStyle = "rgba(15,17,22,0.45)";
+      ctx.fillText("Börja här: 1. Rita en Sektion (parkering)   2. Rita en Väg   3. Lägg till Infart och Utfart", W / 2, H / 2 - 14);
+      ctx.font = "400 14px system-ui, sans-serif";
+      ctx.fillStyle = "rgba(15,17,22,0.35)";
+      ctx.fillText("Verktygen finns under Konstruera till höger — eller byt till Karta och traca en riktig plats.", W / 2, H / 2 + 14);
+      ctx.restore();
+    }
 
     ctx.restore();
   };

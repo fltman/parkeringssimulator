@@ -385,19 +385,46 @@
       }
       return cid;
     }
-    for (let guard = 0; guard < 300; guard++) {
+    // Kruskal over components: hash nodes into a WELD_MAX grid once, collect
+    // cross-component candidate pairs from each 3×3 neighbourhood, then merge
+    // nearest-first with a union-find. Same greedy closest-pair welds as the
+    // old rescan-per-weld loop, but ~O(nodes) instead of O(welds × nodes²) —
+    // that loop dominated every rebuild on big traced sites.
+    {
       const cid = undirComp();
-      let bi = -1, bj = -1, bd = WELD_MAX;
-      for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
-        if (cid[i] === cid[j]) continue;
-        const d = Math.hypot(nodes[i].x - nodes[j].x, nodes[i].y - nodes[j].y);
-        if (d < bd && !insideRing(nodes[i].x, nodes[i].y, nodes[j].x, nodes[j].y)) { bd = d; bi = i; bj = j; }
+      const grid = new Map();
+      const cellOf = (x, y) => Math.floor(x / WELD_MAX) + "," + Math.floor(y / WELD_MAX);
+      for (let i = 0; i < nodes.length; i++) {
+        const key = cellOf(nodes[i].x, nodes[i].y);
+        let arr = grid.get(key);
+        if (!arr) grid.set(key, (arr = []));
+        arr.push(i);
       }
-      if (bi < 0) break;
-      const before = edges.length;
-      addEdge(bi, bj, false);
-      if (edges.length === before) break; // nothing added — avoid spinning
-      welds.push([[nodes[bi].x, nodes[bi].y], [nodes[bj].x, nodes[bj].y]]);
+      const cand = [];
+      for (let i = 0; i < nodes.length; i++) {
+        const cx = Math.floor(nodes[i].x / WELD_MAX), cy = Math.floor(nodes[i].y / WELD_MAX);
+        for (let gx = cx - 1; gx <= cx + 1; gx++) for (let gy = cy - 1; gy <= cy + 1; gy++) {
+          const arr = grid.get(gx + "," + gy);
+          if (!arr) continue;
+          for (const j of arr) {
+            if (j <= i || cid[i] === cid[j]) continue;
+            const d = Math.hypot(nodes[i].x - nodes[j].x, nodes[i].y - nodes[j].y);
+            if (d < WELD_MAX && !insideRing(nodes[i].x, nodes[i].y, nodes[j].x, nodes[j].y)) cand.push({ i, j, d });
+          }
+        }
+      }
+      cand.sort((a, b) => a.d - b.d);
+      const parent = {}; // component-id -> merged-into id (tiny forest, no compression needed)
+      const find = (x) => { while (parent[x] != null) x = parent[x]; return x; };
+      for (const c of cand) {
+        const ra = find(cid[c.i]), rb = find(cid[c.j]);
+        if (ra === rb) continue; // already bridged transitively by an earlier weld
+        const before = edges.length;
+        addEdge(c.i, c.j, false);
+        if (edges.length === before) continue;
+        parent[ra] = rb;
+        welds.push([[nodes[c.i].x, nodes[c.i].y], [nodes[c.j].x, nodes[c.j].y]]);
+      }
     }
 
     const aisleNodes = edges.map((e) => [{ node: e.a, along: 0 }, { node: e.b, along: e.len }]);
@@ -789,19 +816,34 @@
     }
     // Pick a free stall as close as possible to the destination building's door
     // (randomised among the nearest handful, so drivers compete for close spots).
-    function chooseStall(destB) {
+    // Only stalls REACHABLE from the spawning gate (`dij`) count — otherwise a
+    // disconnected section next to the door swallows the whole arrival stream
+    // as "turned away" while the connected lot sits empty.
+    function chooseStall(destB, dij) {
       const free = freeStallList();
       if (!free.length) return -1;
+      const reach = (k) => !dij || isFinite(costTo(k, dij));
       const door = destB >= 0 && sim.net.doors[destB] ? sim.net.doors[destB] : null;
-      if (!door) return free[Math.floor(sim.rng() * free.length)];
+      if (!door) {
+        for (let t = 0; t < 15; t++) {
+          const k = free[Math.floor(sim.rng() * free.length)];
+          if (reach(k)) return k;
+        }
+        return free[Math.floor(sim.rng() * free.length)];
+      }
       const stalls = state.parking.stalls;
       const scored = free.map((k) => {
         const s = stalls[k];
         return { k, d: Math.hypot(s.cx - door[0], s.cy - door[1]) };
       });
       scored.sort((a, b) => a.d - b.d);
-      const K = Math.min(scored.length, 10);
-      return scored[Math.floor(sim.rng() * K)].k;
+      // Walk outward from the door and keep the 10 nearest *reachable* stalls.
+      const ok = [];
+      for (const sc of scored) {
+        if (reach(sc.k)) { ok.push(sc); if (ok.length >= 10) break; }
+      }
+      if (!ok.length) return scored[0].k; // nothing reachable — caller turns the car away
+      return ok[Math.floor(sim.rng() * ok.length)].k;
     }
     function gateBlocked(gnode) {
       const eN = sim.net.nodes[gnode];
@@ -822,7 +864,7 @@
       const ent = sim.net.entrances;
       const dij = sim.net.fromIn[k];
       const destB = chooseDestBuilding();
-      const stallIdx = chooseStall(destB);
+      const stallIdx = chooseStall(destB, dij);
       if (stallIdx < 0) { sim.turnedAway++; return true; }        // lot full
       if (!isFinite(costTo(stallIdx, dij))) { sim.turnedAway++; return true; } // unreachable from this gate
       if (gateBlocked(ent[k])) return false;                      // this gate's mouth is occupied — wait
@@ -1160,11 +1202,14 @@
         const congAhead = Math.max(curEdge ? (curEdge.cong || 0) : 0, nextEdge ? (nextEdge.cong || 0) : 0);
         const congGate = 0.7 - 0.3 * (tr.aggr || 0);       // aggr 1 → 0.40, aggr 0 → 0.70 (aggressive react to a milder jam)
         const rerouteCooldown = 4 + 8 * (1 - (tr.aggr || 0)); // aggr 1 → 4 s, aggr 0 → 12 s (aggressive re-plan more often)
+        // Global throttle is WALL-clock (not sim-time): at tempo 20 a sim-time
+        // gate lets the O(n²) dijkstraCong fire nearly every frame — exactly
+        // when the user is watching a jam. ≤10 replans/s regardless of tempo.
         if (!car.crashed && congAhead > congGate &&
             li.laneKey != null && li.endNode != null && li.endNode >= 0 &&
-            (sim.t - (sim._lastRerouteT || -1e9) >= 0.3) &&
+            (performance.now() - (sim._lastRerouteWall || -1e9) >= 100) &&
             (sim.t - (car._reroutedAt || -1e9)) > rerouteCooldown) {
-          car._reroutedAt = sim.t; sim._lastRerouteT = sim.t; sim._rerouteAttempts = (sim._rerouteAttempts || 0) + 1;
+          car._reroutedAt = sim.t; sim._lastRerouteWall = performance.now(); sim._rerouteAttempts = (sim._rerouteAttempts || 0) + 1;
           if (reroute(car)) { car.stuck = 0; car._didReroute = true; sim.reroutes = (sim.reroutes || 0) + 1; }
         }
 
@@ -1292,6 +1337,10 @@
     sim.reseed = function (seed) {
       sim.seed = seed; sim.rng = mulberry32(seed);
       sim.t = 0; sim.parkedTotal = 0; sim.turnedAway = 0; sim.collisions = 0; sim.gaveUp = 0; sim._arrAcc = 0; sim.recentSearch = [];
+      // Clear the cars too — reseeding only the peds orphaned ped-driven
+      // parked cars (their departAt stayed pinned at Infinity forever).
+      sim.cars = []; sim.selectedCar = null;
+      if (state.parking) for (const s of state.parking.stalls) s.reserved = false;
       sim.peds = []; sim.conflict.clear(); sim._crashPts = []; sim.entCount = null; sim._gateAcc = null; sim.visitTotals = {}; sim.reroutes = 0;
     };
     // Force a car to stall/crash: it stops and blocks its lane for a while.

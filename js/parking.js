@@ -68,7 +68,9 @@
     const Nconn = Math.max(2, Math.min(5, Math.round(cspan / 65) + 1));
     const connectors = [];
     if (!p.noConnectors) for (let j = 0; j < Nconn; j++) connectors.push(cMin + cspan * (j / (Nconn - 1)));
-    const carveHalf = p.aisleW * 0.5 + 0.3;
+    // Carve must clear the whole stall footprint, not just its midpoint — a 45°
+    // stall extends (pitch+|shear|)/2 along the row from its centre.
+    const carveHalf = p.aisleW * 0.5 + 0.3 + (pitch + Math.abs(shear)) / 2;
     const alongOf = horiz ? (pt) => pt[0] : (pt) => pt[1];
     function nearConnector(alongVal) {
       for (const c of connectors) if (Math.abs(alongVal - c) < carveHalf) return true;
@@ -108,7 +110,10 @@
     // (aisle below the row) or -1 (aisle above). `lean` shears the back edge.
     function buildRow(aisleEdge, dir, lean, rowIndex) {
       let slot = 0;
-      for (let a = 0; a <= alongLen; a += pitch, slot++) {
+      // Start the grid INSIDE the setback band (plus 1 cm float headroom) —
+      // starting at 0 puts the first stall's edge exactly on the boundary,
+      // where stallValid's `distToBoundary < setback` culls it every time.
+      for (let a = p.siteSetback + 0.01; a <= alongLen; a += pitch, slot++) {
         const backEdge = aisleEdge + dir * rowDepth; // b of the closed end
         // Parallelogram corners (a, b) — sheared along the row toward the back.
         const c = [
@@ -148,7 +153,10 @@
     // rails form a connected ladder so any road touching the section links in.
     const aisleLines = [];
     let bayIndex = 0;
-    for (let bTop = 0; bTop + bayH <= bandLen + rowDepth; bTop += bayH, bayIndex++) {
+    // Same boundary trap as the a-loop: a bay starting at 0 puts the top row's
+    // back edge exactly on the boundary, so the setback culled a full row per
+    // section. Start the stack inside the setback instead.
+    for (let bTop = p.siteSetback + 0.01; bTop + bayH <= bandLen + rowDepth; bTop += bayH, bayIndex++) {
       const topAisleEdge = bTop + rowDepth;                 // top row opens downward
       const botAisleEdge = bTop + rowDepth + p.aisleW;      // bottom row opens upward
       buildRow(topAisleEdge, -1, shear, bayIndex * 2);       // top row: body above aisle
@@ -169,9 +177,11 @@
       const midB = bTop + rowDepth + p.aisleW * 0.5;         // aisle centreline
       aisleLines.push([P(a0, midB), P(a1, midB)]);
     }
+    // Inset the end rails a hair from the bbox edge: a rail exactly ON a polygon
+    // section's boundary makes clipSegToPolygon's inside/outside test undefined.
     const rails = [
-      [P(0, 0), P(0, bandLen)],
-      [P(alongLen, 0), P(alongLen, bandLen)],
+      [P(0.05, 0), P(0.05, bandLen)],
+      [P(alongLen - 0.05, 0), P(alongLen - 0.05, bandLen)],
     ];
 
     return { stalls, trees, aisles, aisleLines, rails, count: stalls.length, bayH, rowDepth, aisleW: p.aisleW, connectors, horiz };
@@ -234,7 +244,9 @@
       for (const s of r.stalls) {
         const mid = tf([s.cx, s.cy]);
         let inB = false;
-        for (const b of state.buildings || []) if (buildingHit(mid[0], mid[1], b, 0)) { inB = true; break; }
+        // Same clearance as the polygon branch — pad 0 let stall corners poke
+        // up to ~4 m into buildings (midpoint-only test, no perimeter drive).
+        for (const b of state.buildings || []) if (buildingHit(mid[0], mid[1], b, base.buildingClearance)) { inB = true; break; }
         if (inB) continue;
         stalls.push({ corners: s.corners.map(tf), cx: mid[0], cy: mid[1], occupied: false });
       }

@@ -32,10 +32,10 @@
     const gap = 7;    // grass verge between site and street (m)
     const sw = 14;    // street width (m)
     const S = {
-      top:    { name: "French Pl",    y: bb.minY - gap - sw, x: bb.minX - 36, w: bb.w + 72, h: sw, vertical: false },
-      bottom: { name: "Breeze Ter",   y: bb.maxY + gap,      x: bb.minX - 36, w: bb.w + 72, h: sw, vertical: false },
-      left:   { name: "E 32nd St",    x: bb.minX - gap - sw, y: bb.minY - 36, w: sw, h: bb.h + 72, vertical: true },
-      right:  { name: "Edgewood Ave", x: bb.maxX + gap,      y: bb.minY - 36, w: sw, h: bb.h + 72, vertical: true },
+      top:    { name: "Norra gatan",    y: bb.minY - gap - sw, x: bb.minX - 36, w: bb.w + 72, h: sw, vertical: false },
+      bottom: { name: "Södra gatan",   y: bb.maxY + gap,      x: bb.minX - 36, w: bb.w + 72, h: sw, vertical: false },
+      left:   { name: "Västra vägen",    x: bb.minX - gap - sw, y: bb.minY - 36, w: sw, h: bb.h + 72, vertical: true },
+      right:  { name: "Östra vägen", x: bb.maxX + gap,      y: bb.minY - 36, w: sw, h: bb.h + 72, vertical: true },
     };
     const streets = Object.values(S).map((r) => ({
       name: r.name,
@@ -130,7 +130,14 @@
     state.parking = PS.generateManual(state); // manual-only: fill the drawn sections
     applyOccupancy();
     if (state.traffic) {
-      if (state.traffic.running) state.traffic.rebuild();
+      // While a geometry drag is live, keep the stall preview (cheap) but defer
+      // the expensive network rebuild to mouseup — same pattern as gate drops.
+      // Rebuilding the whole drive graph every rAF frame made big traced sites
+      // stutter the moment you moved a building or section.
+      const dragging = drag && (drag.type === "move" || drag.type === "polyvertex" ||
+        drag.type === "resizerect" || drag.type === "rotrect" || drag.type === "section");
+      if (dragging) regen._netStale = true;
+      else if (state.traffic.running) state.traffic.rebuild();
       else state.traffic.net = PS.buildNetwork(state);
     }
     updateMetrics();
@@ -198,7 +205,12 @@
       const js = document.createElement("script");
       js.src = "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js";
       js.onload = () => resolve();
-      js.onerror = () => reject(new Error("Leaflet kunde inte laddas (offline?)"));
+      js.onerror = () => {
+        // Don't cache the rejection — one offline hiccup shouldn't kill map
+        // mode until reload. Drop the memo + dead tags so the next click retries.
+        loadLeaflet._p = null; js.remove(); css.remove();
+        reject(new Error("Leaflet kunde inte laddas (offline?) — prova Karta igen"));
+      };
       document.head.appendChild(js);
     });
     return loadLeaflet._p;
@@ -260,11 +272,26 @@
     const q = `[out:json][timeout:30];(way["building"](poly:"${polyStr}");way["highway"](poly:"${polyStr}"););out geom;`;
     setTraceStatus("Hämtar från OpenStreetMap…");
     try {
-      const resp = await fetch("https://overpass-api.de/api/interpreter", {
-        method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: "data=" + encodeURIComponent(q),
-      });
-      if (!resp.ok) throw new Error("HTTP " + resp.status);
+      // Overpass mirrors are individually flaky/overloaded — time out after
+      // 35 s and fall through to the next mirror instead of hanging forever
+      // on "Hämtar…" with no error path.
+      const MIRRORS = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter"];
+      let resp = null, lastErr = null;
+      for (const url of MIRRORS) {
+        try {
+          resp = await fetch(url, {
+            method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: "data=" + encodeURIComponent(q),
+            signal: AbortSignal.timeout(35000),
+          });
+          if (resp.ok) break;
+          lastErr = new Error("HTTP " + resp.status); resp = null;
+        } catch (e) {
+          lastErr = e.name === "TimeoutError" || e.name === "AbortError" ? new Error("tidsgräns (35 s) — servern svarar inte") : e;
+          resp = null;
+        }
+      }
+      if (!resp) throw lastErr || new Error("ingen Overpass-server svarade");
       const data = await resp.json();
       let nb = 0, nr = 0;
       for (const el of data.elements || []) {
@@ -309,13 +336,23 @@
     if (!q || !state.map) return;
     inp.classList.remove("notfound");
     try {
-      const resp = await fetch("https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" + encodeURIComponent(q), { headers: { "Accept": "application/json" } });
+      // One in-flight search at a time (a new Enter aborts the old one) and a
+      // 10 s timeout, so a hung Nominatim doesn't leave the search dead-silent.
+      if (mapGoto._ac) mapGoto._ac.abort();
+      const ac = (mapGoto._ac = new AbortController());
+      const timer = setTimeout(() => ac.abort(), 10000);
+      const resp = await fetch("https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" + encodeURIComponent(q), { headers: { "Accept": "application/json" }, signal: ac.signal });
+      clearTimeout(timer);
+      if (!resp.ok) throw new Error("HTTP " + resp.status);
       const arr = await resp.json();
       if (!arr.length) { inp.classList.add("notfound"); return; }
       const b = arr[0].boundingbox.map(Number); // [minLat, maxLat, minLon, maxLon]
       state.map.fitBounds([[b[0], b[2]], [b[1], b[3]]], { animate: false, maxZoom: 17, padding: [24, 24] });
       reanchor();
-    } catch (err) { console.error("[mapGoto]", err); inp.classList.add("notfound"); }
+    } catch (err) {
+      if (err.name === "AbortError") return; // superseded by a newer search — not a failure
+      console.error("[mapGoto]", err); inp.classList.add("notfound");
+    }
   }
 
   let pendingMapRestore = null; // saved map view (center/zoom/anchor/pin) to apply once Leaflet loads
@@ -656,6 +693,7 @@
   window.addEventListener("mouseup", () => {
     if (drag && drag.type === "pan") canvas.classList.remove("dragging");
     if (drag && (drag.type === "gate" || drag.type === "roadvertex" || drag.type === "roundcenter" || drag.type === "roundradius")) rebuildNet();
+    if (regen._netStale) { regen._netStale = false; rebuildNet(); } // deferred while dragging (see regen)
     if (drag && drag.type === "drawround") {
       const d = state._draft;
       if (d && d.r > 3) { state.roundabouts.push({ x: d.center[0], y: d.center[1], r: d.r }); rebuildNet(); }
@@ -714,7 +752,7 @@
     const c = viewCenterWorld();
     retailCount++;
     const b = {
-      name: "Retail " + retailCount,
+      name: "Byggnad " + retailCount,
       x: c[0] - 28, y: c[1] - 22, w: 56, h: 44, floors: 1, rot: 0,
       fill: PS.BUILDING_FILLS[(retailCount - 1) % PS.BUILDING_FILLS.length],
     };
@@ -843,7 +881,7 @@
       const poly = d.pts.map((p) => [p[0], p[1]]);
       if (d.kind === "bldg") {
         retailCount++;
-        state.buildings.push({ name: "Retail " + retailCount, poly, floors: 1, fill: PS.BUILDING_FILLS[(retailCount - 1) % PS.BUILDING_FILLS.length] });
+        state.buildings.push({ name: "Byggnad " + retailCount, poly, floors: 1, fill: PS.BUILDING_FILLS[(retailCount - 1) % PS.BUILDING_FILLS.length] });
         state.selection = { type: "building", index: state.buildings.length - 1 };
       } else {
         state.sections.push({ poly, angle: 90, orientation: "h", island: 11 });
@@ -868,7 +906,10 @@
     const selB = sel && sel.type === "building";
     const selG = sel && sel.type === "gate";
     const selS = sel && sel.type === "section";
-    document.getElementById("btn-del").disabled = !(selB || selG || selS);
+    // deleteSelected handles roads/roundabouts too — the button must match,
+    // or a selected road looks undeletable (Delete-key only, undocumented).
+    const canDel = sel && ["building", "gate", "section", "road", "round"].includes(sel.type);
+    document.getElementById("btn-del").disabled = !canDel;
     document.getElementById("floors-field").hidden = !selB;
     if (selB) {
       const b = state.buildings[sel.index];
@@ -912,6 +953,21 @@
     rafId = requestAnimationFrame(simFrame);
   }
   function startTraffic() {
+    // Without a drivable layout + an entrance the sim silently does nothing —
+    // tell the user what's missing instead of flipping to "Pausa trafik".
+    const hint = document.getElementById("sim-hint");
+    const noLayout = !(state.roads || []).length && !(state.sections || []).length;
+    const noIn = !(state.gates || []).some((g2) => g2.type === "in");
+    if (noLayout || noIn) {
+      if (hint) {
+        hint.hidden = false;
+        hint.textContent = noLayout
+          ? "Inget att köra på ännu — rita en väg eller sektion under Konstruera, och lägg till en infart."
+          : "Ingen infart — lägg till minst en infart (+ Infart under Konstruera) så bilarna kan komma in.";
+      }
+      return;
+    }
+    if (hint) hint.hidden = true;
     applyOccupancy();
     sim.rebuild();
     sim.running = true;
@@ -1011,7 +1067,20 @@
   document.getElementById("btn-traffic").addEventListener("click", toggleTraffic);
   document.getElementById("btn-treset").addEventListener("click", resetTraffic);
   document.getElementById("btn-fit").addEventListener("click", () => resize(true));
-  document.getElementById("btn-reset").addEventListener("click", () => {
+  // Two-click confirm for destructive buttons (house style: no blocking
+  // dialogs). First click arms the button for 4 s, second click executes —
+  // these actions wipe the plan AND autosave immediately, with no undo.
+  function armButton(id, armedText, fn) {
+    const btn = document.getElementById(id);
+    const orig = btn.textContent;
+    const disarm = () => { delete btn.dataset.armed; btn.textContent = orig; btn.classList.remove("danger"); };
+    btn.addEventListener("click", () => {
+      if (btn.dataset.armed) { clearTimeout(btn._armT); disarm(); fn(); return; }
+      btn.dataset.armed = "1"; btn.textContent = armedText; btn.classList.add("danger");
+      clearTimeout(btn._armT); btn._armT = setTimeout(disarm, 4000);
+    });
+  }
+  armButton("btn-reset", "Säker? Klicka igen", () => {
     loadBlank();     // blank the current project back to defaults
     saveProject();   // persist the cleared state
   });
@@ -1068,7 +1137,7 @@
   segBind("sec-orient-seg", (v) => updateSelSection("orientation", v));
   document.getElementById("sec-rot").addEventListener("input", (e) => updateSelSection("rot", parseFloat(e.target.value)));
   document.getElementById("sec-island").addEventListener("input", (e) => updateSelSection("island", parseInt(e.target.value, 10)));
-  document.getElementById("btn-clear-layout").addEventListener("click", () => {
+  armButton("btn-clear-layout", "Säker? Klicka igen", () => {
     state.roads = []; state.sections = []; state.roundabouts = []; state.buildings = []; state.gates = []; retailCount = 0;
     state._draft = null; state.selection = null;
     syncSelectionUI(); regen(); rebuildNet(); requestDraw();
@@ -1218,6 +1287,7 @@
           messages: [{ role: "system", content: AI_SYS }, { role: "user", content: aiPayload(r) }],
           max_tokens: 2000, temperature: 0.4,
         }),
+        signal: AbortSignal.timeout(90000), // a hung connection must not wedge the button in "Claude tänker…"
       });
       if (!resp.ok) { const t = await resp.text(); throw new Error("HTTP " + resp.status + " — " + t.slice(0, 300)); }
       const data = await resp.json();
@@ -1225,6 +1295,7 @@
       aiOut.innerHTML = '<span class="ai-badge">Claude · sonnet-5</span>' + (txt ? mdLite(txt) : '<p class="rc-msg">Tomt svar.</p>');
     } catch (err) {
       console.error("[askClaude]", err);
+      if (err.name === "TimeoutError" || err.name === "AbortError") err = new Error("ingen respons på 90 s — försök igen");
       aiOut.innerHTML = `<p class="rc-msg">Kunde inte nå Claude: ${escapeHtml(err.message)}</p>`;
     } finally {
       aiBtn.disabled = false; aiBtn.textContent = label;
@@ -1241,7 +1312,20 @@
   }
   document.getElementById("btn-export-png").addEventListener("click", () => {
     PS.draw(state); // ensure a fresh frame is on the canvas
-    download(`parkering-${currentName()}.png`, canvas.toDataURL("image/png"), false);
+    // Composite onto an opaque background: in map mode the canvas is cleared
+    // to transparent (the live map shows through), which used to export as an
+    // invisible-on-white PNG. toBlob also avoids a multi-MB base64 data-URL.
+    const tmp = document.createElement("canvas");
+    tmp.width = canvas.width; tmp.height = canvas.height;
+    const tc = tmp.getContext("2d");
+    tc.fillStyle = "#e9e6df"; tc.fillRect(0, 0, tmp.width, tmp.height);
+    tc.drawImage(canvas, 0, 0);
+    if (state.mapMode) {
+      const s = state.dpr || 1;
+      tc.fillStyle = "rgba(15,17,22,0.6)"; tc.font = `${12 * s}px system-ui, sans-serif`;
+      tc.fillText("Kartbakgrund ingår ej (© OpenStreetMap)", 12 * s, tmp.height - 12 * s);
+    }
+    tmp.toBlob((b) => { if (b) download(`parkering-${currentName()}.png`, URL.createObjectURL(b), true); }, "image/png");
   });
   // ---- projects: named, auto-saved to localStorage ------------------------
   const REG_KEY = "ps_projects_v1", OLD_KEY = "ps_project_v1";
@@ -1279,14 +1363,16 @@
     el.textContent = txt; el.classList.toggle("saved", !!saved); el.classList.add("show");
     if (saved) { clearTimeout(setStatus._t); setStatus._t = setTimeout(() => el.classList.remove("show"), 1600); }
   }
+  let dirty = false; // unflushed edits in THIS tab — gates the beforeunload save
   function saveProject() {
     if (loadingProject) return; // a project is mid-load — don't persist its transient state over the good save
     const r = loadReg(); if (!r.current) return;
     try { localStorage.setItem(projKey(r.current), JSON.stringify(serializeProject())); } catch (e) { setStatus("Kunde inte spara", false); return; }
+    dirty = false;
     const it = r.items.find((x) => x.id === r.current); if (it) { it.updated = Date.now(); saveReg(r); }
     setStatus("✓ Sparat", true);
   }
-  function scheduleSave() { if (loadingProject) return; setStatus("Sparar…", false); clearTimeout(saveTimer); saveTimer = setTimeout(saveProject, 700); }
+  function scheduleSave() { if (loadingProject) return; dirty = true; setStatus("Sparar…", false); clearTimeout(saveTimer); saveTimer = setTimeout(saveProject, 700); }
 
   function refreshProjectSelect() {
     const r = loadReg(), sel = document.getElementById("project-select");
@@ -1330,7 +1416,7 @@
   // Inline delete confirmation (no blocking dialog): 🗑 → "Ta bort? [Ja] [Avbryt]".
   function hideDelConfirm() { document.getElementById("del-confirm").hidden = true; }
   function deleteProject() {
-    const r = loadReg(); if (!r.current) return;
+    let r = loadReg(); if (!r.current) return; // let: the last-project branch reassigns r
     try { localStorage.removeItem(projKey(r.current)); } catch (e) {}
     r.items = r.items.filter((x) => x.id !== r.current);
     if (r.items.length) { r.current = r.items[0].id; saveReg(r); loadProjectData(r.current); }
@@ -1371,15 +1457,21 @@
   function setSlider(id, valId, v) { const el = document.getElementById(id); if (el != null && v != null) { el.value = v; document.getElementById(valId).textContent = v; } }
   function applyPlan(p) {
     if (!p || p.app !== "parkeringssimulator") throw new Error("okänt filformat");
+    // A superseded in-flight map load must never restore the OLD project's view
+    // into the one we're loading now.
+    pendingMapRestore = null;
     loadingProject = true; // hold off autosave until the (possibly async) map restore has finished
+    let asyncMapRestore = false;
+    try {
     pauseTraffic();
-    if (p.site) state.site = p.site;
+    if (Array.isArray(p.site) && p.site.length >= 3) state.site = p.site;
     if (p.siteName) state.siteName = p.siteName;
-    state.buildings = p.buildings || [];
-    state.gates = p.gates || [];
-    state.roads = p.roads || [];
-    state.sections = p.sections || [];
-    state.roundabouts = p.roundabouts || [];
+    const arr = (x) => (Array.isArray(x) ? x : []);
+    state.buildings = arr(p.buildings);
+    state.gates = arr(p.gates);
+    state.roads = arr(p.roads);
+    state.sections = arr(p.sections);
+    state.roundabouts = arr(p.roundabouts);
     state.layoutMode = "manual";
     if (p.params) Object.assign(state.params, p.params);
     if (typeof p.occupancyFrac === "number") state.occupancyFrac = p.occupancyFrac;
@@ -1418,8 +1510,21 @@
     // Restore the map view if the project was saved in map mode.
     if (p.map && p.map.anchor) {
       pendingMapRestore = p.map; segSetActive("base-seg", "map"); setBasemap("map");
+      asyncMapRestore = true;
       setTimeout(() => { loadingProject = false; }, 8000); // failsafe: re-enable autosave even if the map never loads
-    } else { segSetActive("base-seg", "styled"); loadingProject = false; }
+    } else {
+      // ACTUALLY exit map mode, not just the CSS toggle — otherwise the old
+      // project's map/anchor stay live and get serialized into this project's
+      // next autosave (it silently becomes a map project at the old location).
+      if (state.mapMode) setBasemap("styled");
+      segSetActive("base-seg", "styled");
+      loadingProject = false;
+    }
+    } finally {
+      // A throw mid-restore must not leave loadingProject stuck true — that
+      // silently kills autosave for the rest of the session.
+      if (!asyncMapRestore) loadingProject = false;
+    }
   }
 
   // Selected-car trait editing.
@@ -1477,7 +1582,10 @@
 
   // ---- boot ---------------------------------------------------------------
   window.PSSTATE = state; // debug/testing handle
-  window.addEventListener("beforeunload", saveProject); // persist on close/reload
+  // Persist on close/reload — but ONLY if this tab has unflushed edits. An
+  // unconditional save let a stale second tab silently overwrite the same
+  // project's newer autosaves from another tab just by being closed.
+  window.addEventListener("beforeunload", () => { if (dirty) saveProject(); });
   (function initProjects() {
     let r = loadReg();
     if (!r.items.length) { // migrate the old single-project save, if any

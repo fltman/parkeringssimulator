@@ -982,6 +982,53 @@
       sim.cars.push(car);
       return true;
     }
+    // ---- pedestrian walking routes ------------------------------------
+    // Walkers used to beeline stall->door straight THROUGH buildings (and the
+    // old clear-test only knew rectangles, so traced polygon buildings were
+    // never even checked). When the straight line is blocked, walk the
+    // drivable graph instead — it is building-free by construction. Undirected
+    // (walkers ignore one-way), cached adjacency per net.
+    function pedSegClear(p1, p2) {
+      const n = 8;
+      for (let i = 0; i <= n; i++) {
+        const t = i / n, x = p1[0] + (p2[0] - p1[0]) * t, y = p1[1] + (p2[1] - p1[1]) * t;
+        for (const b of state.buildings) if (PS.buildingHit(x, y, b, 0)) return false;
+      }
+      return true;
+    }
+    function pedRoute(from, to) {
+      if (pedSegClear(from, to)) return [to];
+      const net = sim.net;
+      if (!net || !net.nodes.length) return [to];
+      if (!net._pedAdj) {
+        const ua = net.nodes.map(() => []);
+        for (const e of net.edges) { ua[e.a].push({ to: e.b, len: e.len }); ua[e.b].push({ to: e.a, len: e.len }); }
+        net._pedAdj = ua;
+      }
+      const ua = net._pedAdj;
+      let src = -1, sd = Infinity, dst = -1, dd = Infinity;
+      for (const nd of net.nodes) {
+        const ds = (nd.x - from[0]) * (nd.x - from[0]) + (nd.y - from[1]) * (nd.y - from[1]);
+        const de = (nd.x - to[0]) * (nd.x - to[0]) + (nd.y - to[1]) * (nd.y - to[1]);
+        if (ds < sd) { sd = ds; src = nd.id; }
+        if (de < dd) { dd = de; dst = nd.id; }
+      }
+      if (src < 0 || dst < 0) return [to];
+      const n = net.nodes.length, dist = new Array(n).fill(Infinity), prev = new Array(n).fill(-1), done = new Array(n).fill(false);
+      dist[src] = 0;
+      for (let it = 0; it < n; it++) {
+        let u = -1, ud = Infinity; for (let k = 0; k < n; k++) if (!done[k] && dist[k] < ud) { ud = dist[k]; u = k; }
+        if (u < 0 || u === dst) break; done[u] = true;
+        for (const e of ua[u]) { const nd2 = dist[u] + e.len; if (nd2 < dist[e.to]) { dist[e.to] = nd2; prev[e.to] = u; } }
+      }
+      if (!isFinite(dist[dst])) return [to];
+      const ids = []; let u = dst; while (u !== -1) { ids.push(u); u = prev[u]; } ids.reverse();
+      const wps = ids.map((id) => [net.nodes[id].x, net.nodes[id].y]);
+      wps.push(to);
+      // Trim leading waypoints the walker can already reach directly (less zig-zag).
+      while (wps.length > 1 && pedSegClear(from, wps[1])) wps.shift();
+      return wps;
+    }
     function parkCar(car) {
       const s = state.parking.stalls[car.stallIdx];
       if (!s) { car._dead = true; return; } // stall vanished (layout changed)
@@ -1001,7 +1048,8 @@
       const door = (car.destB != null && car.destB >= 0 && sim.net.doors[car.destB]) ? sim.net.doors[car.destB] : null;
       if (door) {
         car.departAt = Infinity;
-        sim.peds.push({ car, stall: [s.cx, s.cy], door: [door[0], door[1]], x: s.cx, y: s.cy, phase: "toDoor", speed: 1.1 + 0.5 * sim.rng(), shopUntil: 0, gawk: false });
+        const route = [[s.cx, s.cy], ...pedRoute([s.cx, s.cy], [door[0], door[1]])]; // stall -> (graph) -> door
+        sim.peds.push({ car, stall: [s.cx, s.cy], door: [door[0], door[1]], x: s.cx, y: s.cy, route, wpi: 1, phase: "toDoor", speed: 1.1 + 0.5 * sim.rng(), shopUntil: 0, gawk: false });
       } else {
         car.departAt = sim.t + dwellSeconds() * dwellFactorFor(car.destB);
       }
@@ -1405,12 +1453,17 @@
         ped.gawk = false;
         for (const cp of sim._crashPts) { if (Math.abs(ped.x - cp[0]) < 11 && Math.abs(ped.y - cp[1]) < 11) { ped.gawk = true; break; } }
         if (ped.gawk) continue; // stop and look at the crash
-        const tgt = ped.phase === "toDoor" ? ped.door : ped.stall;
+        const route = ped.route || [ped.phase === "toDoor" ? ped.door : ped.stall];
+        const tgt = route[Math.min(ped.wpi || 0, route.length - 1)];
         const dx = tgt[0] - ped.x, dy = tgt[1] - ped.y, d = Math.hypot(dx, dy);
         const stepd = ped.speed * dt;
         if (d <= stepd) {
           ped.x = tgt[0]; ped.y = tgt[1];
-          if (ped.phase === "toDoor") { ped.phase = "inBuilding"; ped.shopUntil = sim.t + dwellSeconds() * 0.6 * dwellFactorFor(ped.car.destB); }
+          if ((ped.wpi || 0) < route.length - 1) { ped.wpi = (ped.wpi || 0) + 1; }
+          else if (ped.phase === "toDoor") {
+            ped.phase = "inBuilding"; ped.shopUntil = sim.t + dwellSeconds() * 0.6 * dwellFactorFor(ped.car.destB);
+            ped.route = [...route].reverse(); ped.wpi = 1; // walk the same way back to the car
+          }
           else { ped._done = true; startLeaving(ped.car); }
         } else { ped.x += (dx / d) * stepd; ped.y += (dy / d) * stepd; }
       }

@@ -378,14 +378,45 @@
     ctx.fillStyle = COLORS.asphalt;
     for (const sec of state.sections || []) { polyPath(ctx, cam, sec.poly || PS.sectionCorners(sec)); ctx.fill(); }
     ctx.strokeStyle = COLORS.asphalt; ctx.lineCap = "round"; ctx.lineJoin = "round";
-    ctx.lineWidth = Math.max(4, 9.75 * cam.scale);
+    // Width follows the lane config: 4.875 m per lane ("1+1" = 9.75, as before).
+    const laneCount = (s) => (s === "1" ? 1 : s === "2" ? 2 : s === "2+1" ? 3 : s === "2+2" ? 4 : 2);
     for (const r of state.roads || []) {
       if (r.length < 2) continue;
+      ctx.lineWidth = Math.max(4, 4.875 * laneCount(r.lanes || "1+1") * cam.scale);
       ctx.beginPath();
       for (let i = 0; i < r.length; i++) { const s = PS.w2s(cam, r[i][0], r[i][1]); if (i) ctx.lineTo(s[0], s[1]); else ctx.moveTo(s[0], s[1]); }
       ctx.stroke();
     }
-    for (const rb of state.roundabouts || []) { const s = PS.w2s(cam, rb.x, rb.y); ctx.beginPath(); ctx.arc(s[0], s[1], rb.r * cam.scale, 0, Math.PI * 2); ctx.stroke(); }
+    for (const rb of state.roundabouts || []) {
+      const s = PS.w2s(cam, rb.x, rb.y);
+      const two = (rb.lanes || 1) >= 2;
+      // Two-lane ring: wider carriageway centred between the two lane rings.
+      const rad = (two ? rb.r - 1.6 : rb.r) * cam.scale;
+      ctx.lineWidth = Math.max(4, (two ? 13 : 9.75) * cam.scale);
+      ctx.beginPath(); ctx.arc(s[0], s[1], rad, 0, Math.PI * 2); ctx.stroke();
+    }
+    // One-way arrows: chevrons along the draw direction so enkelriktat is visible.
+    for (const r of state.roads || []) {
+      const cfg = r.lanes || "1+1";
+      if (cfg !== "1" && cfg !== "2") continue;
+      ctx.save();
+      ctx.strokeStyle = "rgba(255,255,255,0.65)"; ctx.lineWidth = Math.max(1.2, 0.5 * cam.scale); ctx.lineCap = "round";
+      const step = 22; // metres between chevrons
+      let acc = step / 2;
+      for (let i = 0; i < r.length - 1; i++) {
+        const ax = r[i][0], ay = r[i][1], bx = r[i + 1][0], by = r[i + 1][1];
+        const L = Math.hypot(bx - ax, by - ay) || 1, ux = (bx - ax) / L, uy = (by - ay) / L;
+        for (let d = acc; d < L; d += step) {
+          const px = ax + ux * d, py = ay + uy * d;
+          const tip = PS.w2s(cam, px + ux * 1.4, py + uy * 1.4);
+          const l1 = PS.w2s(cam, px - ux * 0.6 - uy * 1.0, py - uy * 0.6 + ux * 1.0);
+          const l2 = PS.w2s(cam, px - ux * 0.6 + uy * 1.0, py - uy * 0.6 - ux * 1.0);
+          ctx.beginPath(); ctx.moveTo(l1[0], l1[1]); ctx.lineTo(tip[0], tip[1]); ctx.lineTo(l2[0], l2[1]); ctx.stroke();
+        }
+        acc = ((acc - L) % step + step) % step;
+      }
+      ctx.restore();
+    }
     ctx.restore();
   }
   // The first anchor of an in-progress road/polygon: a clear target that fills in

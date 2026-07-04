@@ -305,6 +305,10 @@
           state.buildings.push({ name: tags.name || ("Byggnad " + retailCount), poly: pts, floors: parseInt(tags["building:levels"], 10) || 1, fill: PS.BUILDING_FILLS[(retailCount - 1) % PS.BUILDING_FILLS.length] });
           nb++;
         } else if (tags.highway && OSM_ROADS.has(tags.highway) && pts.length >= 2) {
+          // Carry real-world attributes into the sim: one-way + speed limit.
+          pts.lanes = tags.oneway === "yes" || tags.oneway === "1" ? "1" : "1+1";
+          const ms = parseInt(tags.maxspeed, 10);
+          pts.speed = isFinite(ms) && ms > 0 ? Math.min(70, ms) : null;
           state.roads.push(pts); nr++;
         }
       }
@@ -830,7 +834,7 @@
   }
   function finishRoad() {
     if (state._draft && state._draft.type === "road" && state._draft.pts.length >= 2) {
-      state.roads.push(state._draft.pts.map((p) => [p[0], p[1]]));
+      { const nr2 = state._draft.pts.map((p) => [p[0], p[1]]); nr2.lanes = "1+1"; nr2.speed = null; state.roads.push(nr2); }
       rebuildNet();
     }
     state._draft = null;
@@ -930,6 +934,24 @@
       const of2 = b.openFrom != null ? b.openFrom : 0, ot = b.openTo != null ? b.openTo : 24;
       document.getElementById("open-from").value = of2; document.getElementById("open-from-val").textContent = of2;
       document.getElementById("open-to").value = ot; document.getElementById("open-to-val").textContent = ot;
+    }
+    const selR = sel && sel.type === "road";
+    const selRb = sel && sel.type === "round";
+    const roadPanel = document.getElementById("sel-road");
+    if (roadPanel) {
+      roadPanel.hidden = !selR;
+      if (selR) {
+        const r = state.roads[sel.index];
+        const sp = r.speed || 0;
+        document.getElementById("road-speed").value = sp;
+        document.getElementById("road-speed-val").textContent = sp ? sp + " km/h" : "global";
+        segSetActive("road-lanes-seg", r.lanes || "1+1");
+      }
+    }
+    const roundPanel = document.getElementById("sel-round");
+    if (roundPanel) {
+      roundPanel.hidden = !selRb;
+      if (selRb) segSetActive("round-lanes-seg", String((state.roundabouts[sel.index] || {}).lanes || 1));
     }
     const secPanel = document.getElementById("sel-section");
     secPanel.hidden = !selS;
@@ -1157,6 +1179,31 @@
       requestRegen(); // regen + redraw, coalesced per frame → live update while dragging
     }
   }
+  rangeBind("road-speed", "road-speed-val", (v) => {
+    if (state.selection && state.selection.type === "road") {
+      state.roads[state.selection.index].speed = v > 0 ? v : null;
+      document.getElementById("road-speed-val").textContent = v > 0 ? v + " km/h" : "global";
+      rebuildNet(); requestDraw();
+    }
+  });
+  segBind("road-lanes-seg", (v) => {
+    if (state.selection && state.selection.type === "road") {
+      state.roads[state.selection.index].lanes = v;
+      rebuildNet(); requestDraw();
+    }
+  });
+  document.getElementById("btn-road-flip").addEventListener("click", () => {
+    if (state.selection && state.selection.type === "road") {
+      state.roads[state.selection.index].reverse(); // in-place: lane/speed props survive
+      rebuildNet(); requestDraw();
+    }
+  });
+  segBind("round-lanes-seg", (v) => {
+    if (state.selection && state.selection.type === "round") {
+      state.roundabouts[state.selection.index].lanes = parseInt(v, 10);
+      rebuildNet(); requestDraw();
+    }
+  });
   segBind("sec-angle-seg", (v) => updateSelSection("angle", parseInt(v, 10)));
   segBind("sec-orient-seg", (v) => updateSelSection("orientation", v));
   document.getElementById("sec-rot").addEventListener("input", (e) => updateSelSection("rot", parseFloat(e.target.value)));
@@ -1883,7 +1930,8 @@
       siteName: state.siteName,
       site: state.site, buildings: state.buildings, gates: state.gates,
       layoutMode: "manual", params: state.params, occupancyFrac: state.occupancyFrac,
-      roads: state.roads, sections: state.sections, roundabouts: state.roundabouts,
+      roads: (state.roads || []).map((r) => ({ pts: r.map((p) => [p[0], p[1]]), lanes: r.lanes || "1+1", speed: r.speed || null })),
+      sections: state.sections, roundabouts: state.roundabouts,
       traffic: {
         arrivalRate: sim.arrivalRate, dwellMin: sim.dwellMin, speedKmh: sim.speedKmh, followSec: sim.followSec, tempo: sim.tempo,
         arrivalCurve: sim.arrivalCurve || null, clock: sim.hourNow ? +sim.hourNow().toFixed(2) : 8,
@@ -2034,7 +2082,15 @@
     const arr = (x) => (Array.isArray(x) ? x : []);
     state.buildings = arr(p.buildings);
     state.gates = arr(p.gates);
-    state.roads = arr(p.roads);
+    // Roads are point-ARRAYS with lane/speed properties attached (keeps every
+    // geometry call site untouched); serialized as {pts, lanes, speed}. Old
+    // projects stored plain point arrays — normalize both shapes here.
+    state.roads = arr(p.roads).map((r) => {
+      if (Array.isArray(r)) { r.lanes = r.lanes || "1+1"; r.speed = r.speed || null; return r; }
+      const a2 = (r.pts || []).map((p2) => [p2[0], p2[1]]);
+      a2.lanes = r.lanes || "1+1"; a2.speed = r.speed || null;
+      return a2;
+    });
     state.sections = arr(p.sections);
     state.roundabouts = arr(p.roundabouts);
     state.layoutMode = "manual";

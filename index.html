@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Parkeringssimulator</title>
-    <link rel="stylesheet" href="css/styles.css?v=99" />
+    <link rel="stylesheet" href="css/styles.css?v=101" />
   </head>
   <body>
     <div id="app">
@@ -131,6 +131,39 @@
               <div class="row"><button id="btn-trace" class="ghost">🗺️ Trace från kartan</button></div>
               <p class="hint" id="trace-status">I kartläge: rita en yta så hämtas verkliga byggnader och vägar därifrån (OpenStreetMap).</p>
               <div class="row"><button id="btn-clear-layout" class="ghost">Rensa layout</button></div>
+            </section>
+
+            <section id="sel-road" hidden>
+              <h2>Vald väg</h2>
+              <div class="field">
+                <label>Hastighet: <span id="road-speed-val">global</span></label>
+                <input type="range" id="road-speed" min="0" max="70" step="5" value="0" />
+                <p class="hint">0 = följer Hastighet-reglaget under Simulera.</p>
+              </div>
+              <div class="field">
+                <label>Filer</label>
+                <div class="seg" id="road-lanes-seg">
+                  <button data-v="1">1 ⇒</button>
+                  <button data-v="2">2 ⇒</button>
+                  <button data-v="1+1" class="on">1+1</button>
+                  <button data-v="2+1">2+1</button>
+                  <button data-v="2+2">2+2</button>
+                </div>
+                <p class="hint">1 och 2 är enkelriktade i ritriktningen. 2+1: två filer i ritriktningen.</p>
+              </div>
+              <div class="row"><button id="btn-road-flip" class="ghost">⇄ Vänd riktning</button></div>
+            </section>
+
+            <section id="sel-round" hidden>
+              <h2>Vald rondell</h2>
+              <div class="field">
+                <label>Filer</label>
+                <div class="seg" id="round-lanes-seg">
+                  <button data-v="1" class="on">1</button>
+                  <button data-v="2">2</button>
+                </div>
+                <p class="hint">Tvåfilig rondell får en inre ring som fungerar som förbifart.</p>
+              </div>
             </section>
 
             <section id="sel-section" hidden>
@@ -349,11 +382,11 @@
       </div>
     </div>
 
-    <script src="js/geometry.js?v=99"></script>
-    <script src="js/parking.js?v=99"></script>
-    <script src="js/traffic.js?v=99"></script>
-    <script src="js/render.js?v=99"></script>
-    <script src="js/report.js?v=99"></script>
-    <script src="js/app.js?v=99"></script>
+    <script src="js/geometry.js?v=101"></script>
+    <script src="js/parking.js?v=101"></script>
+    <script src="js/traffic.js?v=101"></script>
+    <script src="js/render.js?v=101"></script>
+    <script src="js/report.js?v=101"></script>
+    <script src="js/app.js?v=101"></script>
   </body>
 </html>

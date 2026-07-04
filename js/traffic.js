@@ -276,14 +276,69 @@
   PS.buildNetworkManual = function (state) {
     if (!state.parking) return null;
     const roads = state.roads || [], rounds = state.roundabouts || [];
-    const raw = []; // {a, b, oneway}
-    for (const r of roads) for (let i = 0; i < r.length - 1; i++) raw.push({ a: r[i], b: r[i + 1], oneway: false });
+    const raw = []; // {a, b, oneway, ring, conn, limit, offLane}
+    // Lane config per road: "1"/"2" = one-way (draw direction) with 1/2 lanes,
+    // "1+1" = classic two-way centerline, "2+1"/"2+2" = multi-lane two-way.
+    const laneConfig = (s) => (s === "1" ? { f: 1, b: 0 } : s === "2" ? { f: 2, b: 0 } : s === "2+1" ? { f: 2, b: 1 } : s === "2+2" ? { f: 2, b: 2 } : { f: 1, b: 1 });
+    const LW = 3.25; // lane width (m)
+    // Perpendicular offset of a polyline (positive = right side of travel).
+    function offsetPolyline(pts, d) {
+      const out = [];
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i], pv = pts[i - 1], nx2 = pts[i + 1];
+        let nx = 0, ny = 0;
+        if (pv) { const dx = p[0] - pv[0], dy = p[1] - pv[1], L = Math.hypot(dx, dy) || 1; nx += -dy / L; ny += dx / L; }
+        if (nx2) { const dx = nx2[0] - p[0], dy = nx2[1] - p[1], L = Math.hypot(dx, dy) || 1; nx += -dy / L; ny += dx / L; }
+        const L = Math.hypot(nx, ny) || 1;
+        out.push([p[0] + (nx / L) * d, p[1] + (ny / L) * d]);
+      }
+      return out;
+    }
+    for (const r of roads) {
+      const cfg = laneConfig(r.lanes || "1+1");
+      const limit = r.speed ? r.speed / 3.6 : null;
+      if (cfg.f === 1 && cfg.b === 1) {
+        // classic two-way on the drawn centerline; cars keep right via lat offset
+        for (let i = 0; i < r.length - 1; i++) raw.push({ a: r[i], b: r[i + 1], oneway: false, limit });
+        continue;
+      }
+      // one-way and/or multi-lane: one one-way edge chain PER LANE, offset from
+      // the drawn line. Cars drive ON their lane line (offLane => no keep-right
+      // shift), and pick lanes via routing — congestion-weighted fields spread
+      // load across parallel lanes on their own.
+      const lanes = [];
+      if (cfg.b === 0) { for (let k = 0; k < cfg.f; k++) lanes.push({ o: (k - (cfg.f - 1) / 2) * LW, fwd: true }); }
+      else {
+        for (let k = 0; k < cfg.f; k++) lanes.push({ o: (0.5 + k) * LW, fwd: true });
+        for (let k = 0; k < cfg.b; k++) lanes.push({ o: -(0.5 + k) * LW, fwd: false });
+      }
+      for (const ln of lanes) {
+        const opts = offsetPolyline(r, ln.o);
+        const pts = ln.fwd ? opts : opts.slice().reverse();
+        for (let i = 0; i < pts.length - 1; i++) raw.push({ a: pts[i], b: pts[i + 1], oneway: true, limit, offLane: true });
+      }
+    }
     for (const rb of rounds) {
       // One-way ring, counter-clockwise on screen (right-hand traffic). Angle
-      // decreases so consecutive points run 6→3→12→9 o'clock.
-      const N = 16, pts = [];
-      for (let k = 0; k < N; k++) { const a = -(k / N) * Math.PI * 2; pts.push([rb.x + Math.cos(a) * rb.r, rb.y + Math.sin(a) * rb.r]); }
-      for (let k = 0; k < N; k++) raw.push({ a: pts[k], b: pts[(k + 1) % N], oneway: true });
+      // decreases so consecutive points run 6→3→12→9 o'clock. `ring: true`
+      // drives the give-way logic (plain one-way ROADS must not trigger it).
+      const N = 16;
+      const mkRing = (rad) => {
+        const pts = [];
+        for (let k = 0; k < N; k++) { const a = -(k / N) * Math.PI * 2; pts.push([rb.x + Math.cos(a) * rad, rb.y + Math.sin(a) * rad]); }
+        for (let k = 0; k < N; k++) raw.push({ a: pts[k], b: pts[(k + 1) % N], oneway: true, ring: true });
+        return pts;
+      };
+      const outer = mkRing(rb.r);
+      // Two-lane roundabout: a second concentric ring + lane-change links, so
+      // the inner lane works as a bypass when the outer one queues.
+      if ((rb.lanes || 1) >= 2 && rb.r > 8) {
+        const inner = mkRing(rb.r - 3.25);
+        for (let k = 0; k < N; k += 4) {
+          raw.push({ a: outer[k], b: inner[k], oneway: true, conn: true });
+          raw.push({ a: inner[k], b: outer[k], oneway: true, conn: true });
+        }
+      }
     }
     // Section drive aisles (rungs + rails). Two-way; they auto-split at crossings
     // with drawn roads below, so a road running through a section links into its
@@ -315,26 +370,29 @@
       nodes.push({ id: nodes.length, x, y }); return nodes.length - 1;
     }
     const edges = [], adj = [];
-    function addEdge(aId, bId, oneway) {
+    function addEdge(aId, bId, meta) {
+      meta = meta || {};
+      const oneway = !!meta.oneway;
       if (aId === bId) return;
       const A = nodes[aId], B = nodes[bId], len = Math.hypot(B.x - A.x, B.y - A.y);
       if (len < 0.5) return;
-      // A two-way road may not cut across a roundabout's central island — that
-      // would give cars a straight shortcut through the middle instead of
-      // circulating the one-way ring. The ring's own edges are one-way (exempt).
-      if (!oneway) {
+      // A road (one- OR two-way) may not cut across a roundabout's central
+      // island — that would shortcut the circulation. Only the ring's own
+      // edges and its lane-change connectors are exempt.
+      if (!meta.ring && !meta.conn) {
         const mx = (A.x + B.x) / 2, my = (A.y + B.y) / 2;
         for (const rb of rounds) if (Math.hypot(mx - rb.x, my - rb.y) < rb.r - 1) return;
       }
       for (const e of adj[aId] || []) if (e.to === bId) return; // dedupe
       const id = edges.length;
-      edges.push({ id, a: aId, b: bId, len, block: 0, cong: 0, load: 0, oneway: !!oneway });
+      edges.push({ id, a: aId, b: bId, len, block: 0, cong: 0, load: 0, oneway, ring: !!meta.ring, offLane: !!meta.offLane, limit: meta.limit || null });
       (adj[aId] = adj[aId] || []).push({ edge: id, to: bId, rev: false });
       if (!oneway) (adj[bId] = adj[bId] || []).push({ edge: id, to: aId, rev: true });
     }
     // Split each raw segment at crossings with the others, then chain into edges.
     for (let si = 0; si < raw.length; si++) {
-      const p1 = raw[si].a, p2 = raw[si].b, oneway = raw[si].oneway;
+      const meta = raw[si];
+      const p1 = meta.a, p2 = meta.b;
       const dx = p2[0] - p1[0], dy = p2[1] - p1[1], L2 = dx * dx + dy * dy || 1;
       const cuts = [{ t: 0, p: p1 }, { t: 1, p: p2 }];
       for (let sj = 0; sj < raw.length; sj++) {
@@ -355,11 +413,11 @@
           // carriageway, so an approach road ENDS at the ring instead of
           // protruding into it — cars then merge (and give way) at the edge.
           let skip = false;
-          if (!oneway) {
+          if (!meta.ring && !meta.conn) {
             const mx = (nodes[prev].x + nodes[nid].x) / 2, my = (nodes[prev].y + nodes[nid].y) / 2;
             for (const rb of rounds) if (Math.hypot(mx - rb.x, my - rb.y) < rb.r) { skip = true; break; }
           }
-          if (!skip) addEdge(prev, nid, oneway);
+          if (!skip) addEdge(prev, nid, meta);
         }
         prev = nid;
       }
@@ -429,7 +487,7 @@
         const ra = find(cid[c.i]), rb = find(cid[c.j]);
         if (ra === rb) continue; // already bridged transitively by an earlier weld
         const before = edges.length;
-        addEdge(c.i, c.j, false);
+        addEdge(c.i, c.j, {});
         if (edges.length === before) continue;
         parent[ra] = rb;
         welds.push([[nodes[c.i].x, nodes[c.i].y], [nodes[c.j].x, nodes[c.j].y]]);
@@ -1263,9 +1321,11 @@
         if (car.crashed) { car.v = 0; continue; } // stuck at the scene
         const li = car._li;
         const tr = car.traits;
+        const curE2 = li.edgeId >= 0 ? sim.net.edges[li.edgeId] : null;
+        const vmE = curE2 && curE2.limit ? Math.min(vm, curE2.limit) : vm; // road speed limit (unset = the global Hastighet slider)
 
         // Trait-driven desired speed + following gap.
-        const vdes = vm * g.clamp(0.65 + 0.55 * tr.aggr - 0.35 * tr.caution + 0.25 * tr.stress, 0.3, 1.3);
+        const vdes = vmE * g.clamp(0.65 + 0.55 * tr.aggr - 0.35 * tr.caution + 0.25 * tr.stress, 0.3, 1.3);
         const gapMin = Math.max(0.4, MIN_GAP * (1 + 1.6 * tr.caution - 0.5 * tr.aggr));
         let move = vdes * dt;
         const remTotal = pathRemaining(car);
@@ -1318,8 +1378,9 @@
           if (leaderGap < Infinity) move = Math.min(move, Math.max(0, leaderGap - CAR_LEN - followGap));
           // A stressed, aggressive, stuck driver may pull out to overtake.
           if (sim.allowOvertake && li.laneKey != null && li.edgeId >= 0 &&
+              !(curE2 && curE2.oneway) &&
               ((car.stuck || 0) > 3 || (car.crawl || 0) > 8) &&
-              car.v < Math.max(0.3, 0.35 * vm) && tr.aggr > 0.62 && tr.stress > 0.55 && leader && leaderGap < CAR_LEN + 4 &&
+              car.v < Math.max(0.3, 0.35 * vmE) && tr.aggr > 0.62 && tr.stress > 0.55 && leader && leaderGap < CAR_LEN + 4 &&
               li.remaining > CAR_LEN * 2 && sim.rng() < dt * 0.6) {
             if (oncoming(li).gap > 16) { car.overtaking = true; car.otLeaderQ = leader._li.q; }
           }
@@ -1336,7 +1397,7 @@
           // A car already circulating a roundabout (on a one-way ring edge) keeps
           // priority: it does not yield to entering traffic at the ring node.
           // (Entering cars give way geometrically further below.)
-          const curOnRing = li.edgeId >= 0 && sim.net.edges[li.edgeId] && sim.net.edges[li.edgeId].oneway;
+          const curOnRing = li.edgeId >= 0 && sim.net.edges[li.edgeId] && sim.net.edges[li.edgeId].ring;
           if (!curOnRing) {
             const w = nodeWinner.get(li.endNode);
             if (w && w.car !== car) blocked = true;
@@ -1386,16 +1447,16 @@
         // INSIDE the carriageway: the approaching car is still on a two-way
         // road edge, so it's correctly treated as entering, not circulating.
         if (car.segIndex < car.path.length - 1) {
-          const curRing = li.edgeId >= 0 && sim.net.edges[li.edgeId] && sim.net.edges[li.edgeId].oneway;
+          const curRing = li.edgeId >= 0 && sim.net.edges[li.edgeId] && sim.net.edges[li.edgeId].ring;
           const nseg = car.path[car.segIndex + 1];
-          const nextRing = nseg.edgeId >= 0 && sim.net.edges[nseg.edgeId] && sim.net.edges[nseg.edgeId].oneway;
+          const nextRing = nseg.edgeId >= 0 && sim.net.edges[nseg.edgeId] && sim.net.edges[nseg.edgeId].ring;
           if (!curRing && nextRing && li.endNode != null) {
             const P = sim.net.nodes[li.endNode];
             let give = false;
             for (const o of movers) {
               if (o === car) continue;
               const oe = sim.net.edges[o._li.edgeId];
-              if (!oe || !oe.oneway) continue;                 // o must be circulating on a ring
+              if (!oe || !oe.ring) continue;                   // o must be circulating on a ring
               if ((o.v || 0) < 0.5) continue;                  // ignore a STOPPED ring car (else entry/ring deadlock)
               const rx = P.x - o.x, ry = P.y - o.y, d = Math.hypot(rx, ry);
               if (d > 8) continue;                              // only a genuinely close car — otherwise accept the gap
@@ -1445,7 +1506,8 @@
         // Lateral lane position: keep right on a lane, swing left into the
         // oncoming lane while overtaking, centre while manoeuvring off-lane.
         const onLane = li.laneKey != null || li.keepRight;
-        const latTarget = car.overtaking ? -OT_OFFSET : (onLane ? HALF_LANE : 0);
+        // Offset-lane edges (one-way/multi-lane roads) ARE the lane line — no keep-right shift.
+        const latTarget = car.overtaking ? -OT_OFFSET : (onLane && !(curE2 && curE2.offLane) ? HALF_LANE : 0);
         car.lat = (car.lat || 0) + (latTarget - (car.lat || 0)) * Math.min(1, dt * 4);
 
         // Standstill timer (give-up/overtake semantics): absolute test.
@@ -1455,7 +1517,7 @@
         // cruising speed, which never tripped the old absolute 0.6 m/s tests
         // (drivers stayed serenely calm through ten-minute rolling jams).
         // Recovery only starts above 75% of cruise, so stop-and-go keeps accruing.
-        const v0 = sim.speedKmh / 3.6;
+        const v0 = vmE;
         if (car.v < 0.6 * v0) {
           tr.stress = Math.min(1, tr.stress + dt * (0.02 + 0.05 * tr.stressProne));
           car.crawl = (car.crawl || 0) + dt;

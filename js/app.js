@@ -93,7 +93,7 @@
     occupancyFrac: 0.4,
     showHeat: true,
     showPeds: true,
-    showConflicts: false,
+    showConflicts: true,
     showConn: true,
     follow: false,
     mapMode: false,
@@ -1612,6 +1612,23 @@
         c.fill();
       }
     }
+    // pedestrian/vehicle conflict hotspots (orange rings) — accumulated over
+    // the whole period, unlike the live layer which decays.
+    if (sim._confPeriod && sim._confPeriod.size) {
+      let cMax = 0;
+      for (const v of sim._confPeriod.values()) if (v > cMax) cMax = v;
+      for (const [key, v] of sim._confPeriod) {
+        const f = v / cMax;
+        if (f < 0.08) continue;
+        const [gx, gy] = key.split(",").map(Number);
+        const p = w2s(gx * 4, gy * 4);
+        const rr = (4 + 10 * f) * Math.min(1, sc / 2 + 0.5);
+        c.beginPath(); c.arc(p[0], p[1], rr, 0, Math.PI * 2);
+        c.fillStyle = "rgba(240,110,20," + (0.10 + 0.30 * f) + ")"; c.fill();
+        c.beginPath(); c.arc(p[0], p[1], rr, 0, Math.PI * 2);
+        c.strokeStyle = "rgba(220,90,10," + (0.35 + 0.45 * f) + ")"; c.lineWidth = 1.5; c.stroke();
+      }
+    }
     // title + legend
     const hist = sim.history || [];
     const ps = (sim._periodStart && sim._periodStart.d) ? sim._periodStart
@@ -1620,7 +1637,7 @@
     c.fillText("Periodheatmap — " + currentName(), 16, 24);
     c.font = "14px system-ui, sans-serif"; c.fillStyle = "rgba(15,17,22,0.7)";
     c.fillText((ps.d ? ps.d + " " + fmtClock(ps.h || 0) : "") + " – " + (sim.dateStr || "") + " " + fmtClock(sim.hourNow ? sim.hourNow() : 0) +
-      "   ·   vägfärg = snitträngsel   ·   lila = köområden   ·   platsfärg = beläggningsgrad (grön låg, röd hög)", 16, 50);
+      "   ·   vägfärg = snitträngsel   ·   lila = köområden   ·   orange = bil/gående-konflikter   ·   platsfärg = beläggningsgrad (grön låg, röd hög)", 16, 50);
     cv.toBlob((b) => { if (b) download("heatmap-" + currentName() + ".png", URL.createObjectURL(b), true); }, "image/png");
   }
   { const b1 = document.getElementById("hv-png"); if (b1) b1.addEventListener("click", exportChartPNG);

@@ -1549,6 +1549,9 @@
             if (Math.abs(ped.x - car.x) < 5 && Math.abs(ped.y - car.y) < 5) {
               const k = Math.round(ped.x / 4) + "," + Math.round(ped.y / 4);
               sim.conflict.set(k, Math.min(1, (sim.conflict.get(k) || 0) + 0.12));
+              // Non-decaying twin for the period heatmap export.
+              if (!sim._confPeriod) sim._confPeriod = new Map();
+              sim._confPeriod.set(k, (sim._confPeriod.get(k) || 0) + 1);
               break;
             }
           }
@@ -1659,6 +1662,7 @@
       if (state.parking) for (const st of state.parking.stalls) st._occT = 0;
       if (sim.net) for (const e of sim.net.edges) e._congSum = 0;
       sim._queueGrid = new Map();
+      sim._confPeriod = new Map();
       sim._periodStart = { d: sim.dateStr, h: sim.hourNow ? sim.hourNow() : 8 };
       if (state.parking) for (const s of state.parking.stalls) s.reserved = false;
       sim.peds = []; sim.conflict.clear(); sim._crashPts = []; sim.entCount = null; sim._gateAcc = null; sim._gateWait = null; sim.visitTotals = {}; sim.reroutes = 0; sim.settles = 0; sim.diverted = 0;

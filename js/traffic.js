@@ -1458,7 +1458,13 @@
       for (const car of sim.cars) {
         if (car.state !== "toStall" && car.state !== "toExit") continue;
         const li = car._li;
-        if (li.endNode != null && li.remaining < NODE_APPROACH && car.segIndex < car.path.length - 1) {
+        // A STOPPED car on a ring edge must not "win" the node: the give-way
+        // already yields to MOVING ring cars, so a stalled ring car winning the
+        // node would freeze every entry — the exact entry/ring deadlock the
+        // v<0.5 give-way exemption exists to prevent (it was defeated here).
+        const carOnRing = li.edgeId >= 0 && sim.net.edges[li.edgeId] && sim.net.edges[li.edgeId].ring;
+        if (li.endNode != null && li.remaining < NODE_APPROACH && car.segIndex < car.path.length - 1 &&
+            !(carOnRing && (car.v || 0) < 0.5)) {
           const cur = nodeWinner.get(li.endNode);
           if (!cur || li.remaining < cur.rem) nodeWinner.set(li.endNode, { car, rem: li.remaining });
         }
@@ -1596,17 +1602,34 @@
           const curOnRing = li.edgeId >= 0 && sim.net.edges[li.edgeId] && sim.net.edges[li.edgeId].ring;
           if (!curOnRing) {
             const w = nodeWinner.get(li.endNode);
-            if (w && w.car !== car) blocked = true;
+            // A winner that is itself stuck (or crashed) forfeits the node —
+            // otherwise it freezes every other approach while it cannot move,
+            // and the re-vote picks the same frozen car every tick.
+            if (w && w.car !== car && (w.car.stuck || 0) < 2 && !w.car.crashed) blocked = true;
             const occ = nodeBusy.get(li.endNode);
             if (occ) for (const o of occ) { if (o !== car) { blocked = true; break; } }
           }
           // Both cases: don't pile into an occupied next lane or a blocked edge.
+          // Ring→ring polygon vertices are NOT real junction boxes, and a ring
+          // segment is shorter than the box-clear threshold — so measuring the
+          // next lane from its START stopped a ring car dead for ANY car
+          // anywhere on the next segment (chronic stop-and-go). There, measure
+          // the real bumper gap THROUGH the vertex and drop BOX_CLEAR; the
+          // proximity brake is the physical backstop.
           if (nseg.laneKey != null) {
             const narr = lanes.get(nseg.laneKey) || [];
-            for (const o of narr) { if (o !== car && o._li.q < CAR_LEN + gapMin + BOX_CLEAR) { blocked = true; break; } }
+            const ringVert = curOnRing && nseg.edgeId >= 0 && sim.net.edges[nseg.edgeId] && sim.net.edges[nseg.edgeId].ring;
+            for (const o of narr) {
+              if (o === car) continue;
+              const blk = ringVert ? (li.remaining + o._li.q < CAR_LEN + gapMin) : (o._li.q < CAR_LEN + gapMin + BOX_CLEAR);
+              if (blk) { blocked = true; break; }
+            }
           }
           if (nseg.edgeId >= 0 && sim.net.edges[nseg.edgeId] && sim.net.edges[nseg.edgeId].block >= 1) blocked = true;
-          if (blocked) move = Math.min(move, Math.max(0, li.remaining - STOP_OFFSET));
+          // Entering a ring: hold the whole car clear of the circulating lane.
+          const enteringRing = !curOnRing && nseg.edgeId >= 0 && sim.net.edges[nseg.edgeId] && sim.net.edges[nseg.edgeId].ring;
+          const stopBack = enteringRing ? STOP_OFFSET + CAR_LEN * 0.5 : STOP_OFFSET;
+          if (blocked) move = Math.min(move, Math.max(0, li.remaining - stopBack));
         }
 
         // General merge guard: never roll onto a lane whose entry is occupied —
@@ -1669,7 +1692,11 @@
               if (d > 8) continue;                              // only a genuinely close car — otherwise accept the gap
               if (d < 2 || rx * (o.hx || 0) + ry * (o.hy || 0) > 0) { give = true; break; } // right at / approaching the entry
             }
-            if (give) { sim._giveWays = (sim._giveWays || 0) + 1; move = Math.min(move, Math.max(0, li.remaining - STOP_OFFSET)); } // hold before merging
+            // Hold back so the NOSE clears the ring, not just the centre: the
+            // merge node sits ON the circulating lane, so a plain STOP_OFFSET
+            // (centre 2.5 m back) left the nose ~0.2 m into the ring, blocking
+            // it. STOP_OFFSET + half a car keeps the whole car clear.
+            if (give) { sim._giveWays = (sim._giveWays || 0) + 1; move = Math.min(move, Math.max(0, li.remaining - (STOP_OFFSET + CAR_LEN * 0.5))); }
           }
         }
 

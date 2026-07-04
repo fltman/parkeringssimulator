@@ -899,6 +899,13 @@
     document.querySelectorAll(".tab-page").forEach((p) => { p.hidden = p.dataset.page !== name; });
   }
   document.getElementById("panel-tabs").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) showTab(b.dataset.tab); });
+  // Header clock/date is a shortcut to the time & calendar controls.
+  { const mc = document.getElementById("m-clock");
+    if (mc && mc.parentElement) {
+      mc.parentElement.style.cursor = "pointer";
+      mc.parentElement.title = "Justera tid och datum (Simulera-fliken)";
+      mc.parentElement.addEventListener("click", () => { showTab("sim"); const el = document.getElementById("clock"); if (el) el.scrollIntoView({ block: "center" }); });
+    } }
 
   function syncSelectionUI() {
     const sel = state.selection;
@@ -911,10 +918,18 @@
     const canDel = sel && ["building", "gate", "section", "road", "round"].includes(sel.type);
     document.getElementById("btn-del").disabled = !canDel;
     document.getElementById("floors-field").hidden = !selB;
+    document.getElementById("attract-field").hidden = !selB;
+    document.getElementById("open-field").hidden = !selB;
     if (selB) {
       const b = state.buildings[sel.index];
       document.getElementById("floors").value = b.floors || 1;
       document.getElementById("floors-val").textContent = b.floors || 1;
+      const at = Math.round((b.attract != null ? b.attract : 1) * 100);
+      document.getElementById("attract").value = at;
+      document.getElementById("attract-val").textContent = at;
+      const of2 = b.openFrom != null ? b.openFrom : 0, ot = b.openTo != null ? b.openTo : 24;
+      document.getElementById("open-from").value = of2; document.getElementById("open-from-val").textContent = of2;
+      document.getElementById("open-to").value = ot; document.getElementById("open-to-val").textContent = ot;
     }
     const secPanel = document.getElementById("sel-section");
     secPanel.hidden = !selS;
@@ -981,6 +996,7 @@
     sim.running = false;
     if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
     document.getElementById("btn-traffic").textContent = "▶ Starta trafik";
+    updateTrafficStats(); // freeze the header clock/stats at the TRUE paused state, not the last frame's
     requestDraw();
   }
   function toggleTraffic() { sim.running ? pauseTraffic() : startTraffic(); }
@@ -994,6 +1010,8 @@
     requestDraw();
   }
   function updateTrafficStats() {
+    updateClockUI(); drawArrCurve(); updateCalUI(); drawStatsChart();
+    if (hvEl && !hvEl.hidden) drawHistoryView();
     const s = sim.stats;
     document.getElementById("t-circ").textContent = s.circulating;
     document.getElementById("t-park").textContent = s.parked;
@@ -1158,7 +1176,320 @@
     updateMetrics();
     requestDraw();
   });
-  rangeBind("arr", "arr-val", (v) => { sim.arrivalRate = v; });
+  // ---- arrival day-curve widget (draggable) + clock -----------------------
+  // 24 hourly buckets (cars/min); drag on the canvas to paint the profile.
+  const CURVE_MAX = 150; // hard cap (cars/min)
+  // Y-scale adapts to the curve so a 0-10 profile isn't a row of invisible
+  // nubs; 25% headroom lets you drag values upward past the current peak.
+  function curveScale(curve) { let m = 0; for (const v of curve) if (v > m) m = v; return Math.max(50, Math.min(CURVE_MAX, Math.ceil(m * 1.25))); }
+  const curveCv = document.getElementById("arr-curve");
+  function defaultCurve(peak) {
+    // Classic retail day: quiet night, morning ramp, afternoon peak, evening taper.
+    const shape = [0.05, 0.03, 0.02, 0.02, 0.03, 0.06, 0.12, 0.25, 0.4, 0.55, 0.7, 0.82, 0.9, 0.96, 1, 1, 0.95, 0.88, 0.75, 0.55, 0.38, 0.24, 0.14, 0.08];
+    const p = Math.max(5, peak || 40);
+    return shape.map((f) => Math.round(f * p));
+  }
+  function fmtClock(h) { const hh = Math.floor(h) % 24, mm = Math.floor((h - Math.floor(h)) * 60); return String(hh).padStart(2, "0") + ":" + String(mm).padStart(2, "0"); }
+  let arrPaintInfo = null; // {i, val} while dragging — live readout so you're not painting blind
+  function drawArrCurve() {
+    if (!curveCv) return;
+    const dpr = window.devicePixelRatio || 1;
+    const W = curveCv.clientWidth || 260, H = curveCv.clientHeight || 76;
+    if (curveCv.width !== Math.round(W * dpr)) { curveCv.width = Math.round(W * dpr); curveCv.height = Math.round(H * dpr); }
+    const c = curveCv.getContext("2d");
+    c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    c.clearRect(0, 0, W, H);
+    const curve = sim.arrivalCurve && sim.arrivalCurve.length === 24 ? sim.arrivalCurve : (sim.arrivalCurve = defaultCurve(sim.arrivalRate));
+    const bw = W / 24;
+    const scale = curveScale(curve);
+    // hour gridlines at 06/12/18
+    c.strokeStyle = "rgba(15,17,22,0.08)"; c.lineWidth = 1;
+    for (const gh of [6, 12, 18]) { const x = gh / 24 * W; c.beginPath(); c.moveTo(x, 0); c.lineTo(x, H); c.stroke(); }
+    // bars
+    c.fillStyle = "rgba(59,91,219,0.32)";
+    for (let i = 0; i < 24; i++) {
+      const bh = Math.max(1, (curve[i] / scale) * (H - 14));
+      c.fillRect(i * bw + 1, H - bh, bw - 2, bh);
+    }
+    // time-of-day marker
+    if (sim.hourNow) {
+      const h = sim.hourNow();
+      const x = h / 24 * W;
+      c.strokeStyle = "#e8590c"; c.lineWidth = 1.5;
+      c.beginPath(); c.moveTo(x, 0); c.lineTo(x, H); c.stroke();
+    }
+    // axis labels
+    c.fillStyle = "rgba(15,17,22,0.45)"; c.font = "9px system-ui, sans-serif"; c.textAlign = "left";
+    c.fillText("00", 2, H - 3); c.textAlign = "center"; c.fillText("06", W * 0.25, H - 3); c.fillText("12", W * 0.5, H - 3); c.fillText("18", W * 0.75, H - 3);
+    c.textAlign = "right"; c.fillText("24", W - 2, H - 3);
+    // live value bubble while painting
+    if (arrPaintInfo) {
+      const bx = (arrPaintInfo.i + 0.5) * bw;
+      const txt = String(arrPaintInfo.i).padStart(2, "0") + " · " + arrPaintInfo.val + " bilar/min";
+      c.font = "600 10px system-ui, sans-serif";
+      const tw = c.measureText(txt).width;
+      const px = Math.max(tw / 2 + 4, Math.min(W - tw / 2 - 4, bx));
+      c.fillStyle = "rgba(15,17,22,0.85)";
+      c.fillRect(px - tw / 2 - 5, 2, tw + 10, 14);
+      c.fillStyle = "#fff"; c.textAlign = "center"; c.textBaseline = "middle";
+      c.fillText(txt, px, 9);
+    }
+  }
+  function updateClockUI() {
+    if (!sim.hourNow) return;
+    const h = sim.hourNow();
+    const cv = document.getElementById("clock-val"); if (cv) cv.textContent = fmtClock(h);
+    const rv = document.getElementById("curve-val"); if (rv) rv.textContent = Math.round(sim._rateNow != null ? sim._rateNow : (sim.curveAt ? sim.curveAt(h) : sim.arrivalRate));
+    const cl = document.getElementById("clock"); if (cl && document.activeElement !== cl) cl.value = h.toFixed(2);
+  }
+  if (curveCv) {
+    let painting = false, lastI = -1;
+    const paint = (e) => {
+      const r = curveCv.getBoundingClientRect();
+      const i = Math.max(0, Math.min(23, Math.floor((e.clientX - r.left) / r.width * 24)));
+      const curve = sim.arrivalCurve || (sim.arrivalCurve = defaultCurve(sim.arrivalRate));
+      const val = Math.max(0, Math.min(CURVE_MAX, Math.round((1 - (e.clientY - r.top) / r.height) * curveScale(curve))));
+      // fill the gap between the last painted bucket and this one (fast drags)
+      if (lastI >= 0 && Math.abs(i - lastI) > 1) {
+        const a = Math.min(i, lastI), b = Math.max(i, lastI);
+        for (let j = a; j <= b; j++) curve[j] = val;
+      } else curve[i] = val;
+      lastI = i;
+      arrPaintInfo = { i, val };
+      drawArrCurve(); scheduleSave();
+    };
+    curveCv.addEventListener("mousedown", (e) => { painting = true; lastI = -1; paint(e); e.preventDefault(); });
+    window.addEventListener("mousemove", (e) => { if (painting) paint(e); });
+    window.addEventListener("mouseup", () => { if (painting) { arrPaintInfo = null; drawArrCurve(); } painting = false; lastI = -1; });
+  }
+  const clockEl = document.getElementById("clock");
+  if (clockEl) clockEl.addEventListener("input", () => {
+    const h = parseFloat(clockEl.value) || 0;
+    sim.clockStart = ((h - sim.t / 60) % 24 + 24) % 24; // so hourNow() === h right now
+    updateClockUI(); drawArrCurve(); scheduleSave();
+  });
+
+  // ---- calendar: weekday / month multipliers (paintable) + date + payday ---
+  const WD_NAMES = ["mån", "tis", "ons", "tor", "fre", "lör", "sön"];
+  const MON_NAMES = ["jan", "feb", "mar", "apr", "maj", "jun", "jul", "aug", "sep", "okt", "nov", "dec"];
+  function defaultWeek() { return [0.8, 0.85, 0.9, 1.0, 1.3, 1.5, 1.1]; }
+  function defaultMonth() { return [0.7, 0.8, 0.9, 0.95, 1.0, 1.0, 0.9, 0.95, 1.0, 1.05, 1.2, 1.6]; }
+  // Tiny paintable histogram (same drag-to-shape interaction as the day curve).
+  function miniHist(cvId, opts) {
+    const cv = document.getElementById(cvId);
+    if (!cv) return { draw: () => {} };
+    let paintInfo = null; // {i, val} while dragging
+    function draw() {
+      const dpr = window.devicePixelRatio || 1;
+      const W = cv.clientWidth || 260, H = cv.clientHeight || 44;
+      if (cv.width !== Math.round(W * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+      const c = cv.getContext("2d");
+      c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, W, H);
+      const vals = opts.values(), n = vals.length, bw = W / n;
+      const hi = opts.highlight ? opts.highlight() : -1;
+      const y1 = H - (1 / opts.max) * (H - 12); // 1x reference line
+      c.strokeStyle = "rgba(15,17,22,0.15)"; c.setLineDash([3, 3]);
+      c.beginPath(); c.moveTo(0, y1); c.lineTo(W, y1); c.stroke(); c.setLineDash([]);
+      for (let i = 0; i < n; i++) {
+        const bh = Math.max(1, (vals[i] / opts.max) * (H - 12));
+        c.fillStyle = i === hi ? "rgba(232,89,12,0.55)" : "rgba(59,91,219,0.32)";
+        c.fillRect(i * bw + 1, H - bh, bw - 2, bh);
+        if (opts.labels && opts.labels[i]) {
+          c.fillStyle = "rgba(15,17,22,0.45)"; c.font = "8px system-ui, sans-serif"; c.textAlign = "center";
+          c.fillText(opts.labels[i], (i + 0.5) * bw, 8);
+        }
+      }
+      if (paintInfo) {
+        const bx = (paintInfo.i + 0.5) * bw;
+        const txt = (opts.names ? opts.names[paintInfo.i] + " " : "") + "×" + paintInfo.val.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
+        c.font = "600 10px system-ui, sans-serif";
+        const tw = c.measureText(txt).width;
+        const px = Math.max(tw / 2 + 4, Math.min(W - tw / 2 - 4, bx));
+        c.fillStyle = "rgba(15,17,22,0.85)"; c.fillRect(px - tw / 2 - 5, 1, tw + 10, 13);
+        c.fillStyle = "#fff"; c.textAlign = "center"; c.textBaseline = "middle";
+        c.fillText(txt, px, 7);
+      }
+    }
+    let painting = false;
+    const paint = (e) => {
+      const r = cv.getBoundingClientRect();
+      const vals = opts.values(), n = vals.length;
+      const i = Math.max(0, Math.min(n - 1, Math.floor((e.clientX - r.left) / r.width * n)));
+      const v = Math.max(0, Math.min(opts.max, (1 - (e.clientY - r.top) / r.height) * opts.max));
+      vals[i] = Math.round(v * 20) / 20; // 0.05x steps
+      paintInfo = { i, val: vals[i] };
+      draw(); if (opts.onPaint) opts.onPaint();
+    };
+    cv.addEventListener("mousedown", (e) => { painting = true; paint(e); e.preventDefault(); });
+    window.addEventListener("mousemove", (e) => { if (painting) paint(e); });
+    window.addEventListener("mouseup", () => { if (painting) { paintInfo = null; draw(); } painting = false; });
+    return { draw };
+  }
+  const weekHist = miniHist("week-curve", {
+    values: () => (sim.weekMult && sim.weekMult.length === 7 ? sim.weekMult : (sim.weekMult = defaultWeek())),
+    max: 3, labels: WD_NAMES.map((w) => w[0]), names: WD_NAMES,
+    highlight: () => (sim.calMult ? sim.calMult().weekday : -1),
+    onPaint: () => { updateCalUI(); scheduleSave(); },
+  });
+  const monthHist = miniHist("month-curve", {
+    values: () => (sim.monthMult && sim.monthMult.length === 12 ? sim.monthMult : (sim.monthMult = defaultMonth())),
+    max: 3, labels: MON_NAMES.map((m) => m[0]), names: MON_NAMES,
+    highlight: () => (sim.calMult ? sim.calMult().month : -1),
+    onPaint: () => { updateCalUI(); scheduleSave(); },
+  });
+  function updateCalUI() {
+    if (!sim.calMult) return;
+    const cm = sim.calMult();
+    const lbl = WD_NAMES[cm.weekday] + " " + cm.dom + " " + MON_NAMES[cm.month];
+    const el = (id) => document.getElementById(id);
+    if (el("date-label")) el("date-label").textContent = lbl;
+    if (el("cal-mult")) el("cal-mult").textContent = (Math.round(cm.total * 100) / 100);
+    if (el("week-x")) el("week-x").textContent = cm.w;
+    if (el("month-x")) el("month-x").textContent = cm.m;
+    if (el("payday-val")) el("payday-val").textContent = sim.payday;
+    if (el("payday-x-val")) el("payday-x-val").textContent = (+sim.paydayMult).toFixed(1);
+    const sd = el("sim-date"); if (sd && document.activeElement !== sd && sim.dateStr) sd.value = sim.dateStr;
+    if (el("m-date")) el("m-date").textContent = lbl;
+    if (el("m-clock") && sim.hourNow) el("m-clock").textContent = fmtClock(sim.hourNow());
+    weekHist.draw(); monthHist.draw();
+  }
+  const dateEl = document.getElementById("sim-date");
+  if (dateEl) dateEl.addEventListener("change", () => {
+    if (dateEl.value) { sim.dateStr = dateEl.value; updateCalUI(); scheduleSave(); }
+  });
+  rangeBind("payday", "payday-val", (v) => { sim.payday = v; updateCalUI(); scheduleSave(); });
+  rangeBind("payday-x", "payday-x-val", (v) => { sim.paydayMult = v; updateCalUI(); scheduleSave(); });
+
+  // ---- dedicated history view (large overlay chart) -----------------------
+  const hvEl = document.getElementById("history-view");
+  let hvHoverX = null;
+  function hvOpen() { if (hvEl) { hvEl.hidden = false; drawHistoryView(); } }
+  function hvClose() { if (hvEl) hvEl.hidden = true; }
+  const hvOpenLink = document.getElementById("hv-open");
+  if (hvOpenLink) hvOpenLink.addEventListener("click", (e) => { e.preventDefault(); hvOpen(); });
+  const statsMini = document.getElementById("stats-chart");
+  if (statsMini) statsMini.addEventListener("click", hvOpen);
+  const hvCloseBtn = document.getElementById("hv-close");
+  if (hvCloseBtn) hvCloseBtn.addEventListener("click", hvClose);
+  window.addEventListener("keydown", (e) => { if (e.key === "Escape" && hvEl && !hvEl.hidden) hvClose(); });
+  for (const id of ["hv-c", "hv-p", "hv-q"]) {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("change", drawHistoryView);
+  }
+  const hvCv = document.getElementById("hv-canvas");
+  if (hvCv) {
+    hvCv.addEventListener("mousemove", (e) => { const r = hvCv.getBoundingClientRect(); hvHoverX = e.clientX - r.left; drawHistoryView(); });
+    hvCv.addEventListener("mouseleave", () => { hvHoverX = null; drawHistoryView(); });
+  }
+  function drawHistoryView() {
+    if (!hvEl || hvEl.hidden || !hvCv) return;
+    const hist = sim.history || [];
+    const dpr = window.devicePixelRatio || 1;
+    const W = hvCv.clientWidth || 600, H = hvCv.clientHeight || 300;
+    if (hvCv.width !== Math.round(W * dpr)) { hvCv.width = Math.round(W * dpr); hvCv.height = Math.round(H * dpr); }
+    const c = hvCv.getContext("2d");
+    c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, W, H);
+    const info = document.getElementById("hv-info");
+    if (hist.length < 2) {
+      c.fillStyle = "rgba(15,17,22,0.45)"; c.font = "14px system-ui, sans-serif"; c.textAlign = "center";
+      c.fillText("Ingen historik ännu — starta trafiken så börjar kurvorna ritas.", W / 2, H / 2);
+      if (info) info.textContent = "";
+      return;
+    }
+    const PL = 44, PR = 14, PT = 10, PB = 24; // paddings
+    const IW = W - PL - PR, IH = H - PT - PB;
+    const t0 = hist[0].t, t1 = hist[hist.length - 1].t, span = Math.max(1, t1 - t0);
+    const on = { c: document.getElementById("hv-c").checked, p: document.getElementById("hv-p").checked, q: document.getElementById("hv-q").checked };
+    let maxY = 5;
+    for (const s of hist) { if (on.c) maxY = Math.max(maxY, s.c); if (on.p) maxY = Math.max(maxY, s.p); if (on.q) maxY = Math.max(maxY, s.q); }
+    // nice ceiling
+    const pow = Math.pow(10, Math.max(0, String(Math.floor(maxY)).length - 1));
+    maxY = Math.ceil(maxY / pow) * pow;
+    const X = (t) => PL + (t - t0) / span * IW;
+    const Y = (v) => PT + IH - (v / maxY) * IH;
+    // night shading (22-06) as bands across sample runs
+    c.fillStyle = "rgba(15,17,22,0.06)";
+    let bandStart = null;
+    for (let i = 0; i < hist.length; i++) {
+      const night = hist[i].h < 6 || hist[i].h >= 22;
+      if (night && bandStart == null) bandStart = X(hist[i].t);
+      if ((!night || i === hist.length - 1) && bandStart != null) { c.fillRect(bandStart, PT, X(hist[i].t) - bandStart, IH); bandStart = null; }
+    }
+    // midnight boundaries
+    c.strokeStyle = "rgba(15,17,22,0.25)"; c.setLineDash([4, 4]);
+    for (let i = 1; i < hist.length; i++) {
+      if (hist[i].h < hist[i - 1].h - 12) { const x = X(hist[i].t); c.beginPath(); c.moveTo(x, PT); c.lineTo(x, PT + IH); c.stroke(); }
+    }
+    c.setLineDash([]);
+    // horizontal grid + y labels
+    c.font = "10px system-ui, sans-serif"; c.textAlign = "right"; c.textBaseline = "middle";
+    for (let g2 = 0; g2 <= 4; g2++) {
+      const v = maxY * g2 / 4, y = Y(v);
+      c.strokeStyle = "rgba(15,17,22,0.07)"; c.beginPath(); c.moveTo(PL, y); c.lineTo(PL + IW, y); c.stroke();
+      c.fillStyle = "rgba(15,17,22,0.55)"; c.fillText(String(Math.round(v)), PL - 6, y);
+    }
+    // x ticks (~7 evenly spaced, labelled with the sampled clock)
+    c.textAlign = "center"; c.textBaseline = "top";
+    for (let g2 = 0; g2 <= 6; g2++) {
+      const idx = Math.min(hist.length - 1, Math.round((hist.length - 1) * g2 / 6));
+      const x = X(hist[idx].t);
+      c.strokeStyle = "rgba(15,17,22,0.12)"; c.beginPath(); c.moveTo(x, PT + IH); c.lineTo(x, PT + IH + 4); c.stroke();
+      c.fillStyle = "rgba(15,17,22,0.55)"; c.fillText(fmtClock(hist[idx].h), x, PT + IH + 7);
+    }
+    // series
+    const line = (key, color) => {
+      c.strokeStyle = color; c.lineWidth = 1.8; c.beginPath();
+      for (let i = 0; i < hist.length; i++) { const x = X(hist[i].t), y = Y(hist[i][key]); if (i) c.lineTo(x, y); else c.moveTo(x, y); }
+      c.stroke();
+    };
+    if (on.c) line("c", "#3b5bdb");
+    if (on.p) line("p", "#2b8a3e");
+    if (on.q) line("q", "#e03131");
+    // hover crosshair + readout
+    if (hvHoverX != null && hvHoverX >= PL && hvHoverX <= PL + IW) {
+      const tAt = t0 + (hvHoverX - PL) / IW * span;
+      let lo = 0, hi = hist.length - 1;
+      while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (hist[mid].t < tAt) lo = mid; else hi = mid; }
+      const s = (tAt - hist[lo].t < hist[hi].t - tAt) ? hist[lo] : hist[hi];
+      const x = X(s.t);
+      c.strokeStyle = "rgba(15,17,22,0.35)"; c.beginPath(); c.moveTo(x, PT); c.lineTo(x, PT + IH); c.stroke();
+      for (const [key, color] of [["c", "#3b5bdb"], ["p", "#2b8a3e"], ["q", "#e03131"]]) {
+        if (!on[key]) continue;
+        c.fillStyle = color; c.beginPath(); c.arc(x, Y(s[key]), 3.2, 0, Math.PI * 2); c.fill();
+      }
+      if (info) info.textContent = "kl " + fmtClock(s.h) + " — rullande " + s.c + " · parkerade " + s.p + " · kö " + s.q;
+    } else if (info) {
+      info.textContent = hist.length + " mätpunkter · " + fmtClock(hist[0].h) + "–" + fmtClock(hist[hist.length - 1].h);
+    }
+  }
+
+  // ---- time-series chart: circulating / parked / queue over sim time ------
+  function drawStatsChart() {
+    const cv = document.getElementById("stats-chart");
+    if (!cv || !sim.history || sim.history.length < 2) return;
+    const dpr = window.devicePixelRatio || 1;
+    const W = cv.clientWidth || 260, H = cv.clientHeight || 90;
+    if (cv.width !== Math.round(W * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+    const c = cv.getContext("2d");
+    c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, W, H);
+    const hist = sim.history;
+    let maxY = 5;
+    for (const s of hist) maxY = Math.max(maxY, s.c, s.p, s.q);
+    const t0 = hist[0].t, t1 = hist[hist.length - 1].t, span = Math.max(1, t1 - t0);
+    const X = (t) => (t - t0) / span * W;
+    const Y = (v) => H - 4 - (v / maxY) * (H - 18);
+    const line = (key, color) => {
+      c.strokeStyle = color; c.lineWidth = 1.5; c.beginPath();
+      for (let i = 0; i < hist.length; i++) { const x = X(hist[i].t), y = Y(hist[i][key]); if (i) c.lineTo(x, y); else c.moveTo(x, y); }
+      c.stroke();
+    };
+    line("c", "#3b5bdb"); line("p", "#2b8a3e"); line("q", "#e03131");
+    // time labels (clock at window edges) + y max
+    c.fillStyle = "rgba(15,17,22,0.5)"; c.font = "9px system-ui, sans-serif";
+    c.textAlign = "left"; c.fillText(fmtClock(hist[0].h), 3, 9);
+    c.textAlign = "right"; c.fillText(fmtClock(hist[hist.length - 1].h), W - 3, 9);
+    c.textAlign = "left"; c.fillText(String(maxY), 3, Y(maxY) + 9);
+  }
   rangeBind("dwell", "dwell-val", (v) => { sim.dwellMin = v; });
   rangeBind("speed", "speed-val", (v) => { sim.speedKmh = v; });
   rangeBind("follow", "follow-val", (v) => { sim.followSec = v; });
@@ -1347,6 +1678,9 @@
       roads: state.roads, sections: state.sections, roundabouts: state.roundabouts,
       traffic: {
         arrivalRate: sim.arrivalRate, dwellMin: sim.dwellMin, speedKmh: sim.speedKmh, followSec: sim.followSec, tempo: sim.tempo,
+        arrivalCurve: sim.arrivalCurve || null, clock: sim.hourNow ? +sim.hourNow().toFixed(2) : 8,
+        dateStr: sim.dateStr || null, weekMult: sim.weekMult || null, monthMult: sim.monthMult || null,
+        payday: sim.payday, paydayMult: sim.paydayMult,
         meanAggr: sim.meanAggr, meanCaution: sim.meanCaution, traitSpread: sim.traitSpread, allowOvertake: sim.allowOvertake,
       },
       map: (state.mapMode && state.map && state._anchor) ? {
@@ -1387,6 +1721,10 @@
     state.buildings = []; state.gates = []; state.roads = []; state.sections = []; state.roundabouts = [];
     state.layoutMode = "manual"; state.tool = "select"; state._draft = null; state.selection = null;
     state._report = null; retailCount = 0; state.occupancyFrac = 0.4;
+    sim.arrivalCurve = defaultCurve(40); sim.clockStart = ((8 - sim.t / 60) % 24 + 24) % 24; // fresh day profile per new project
+    sim.weekMult = defaultWeek(); sim.monthMult = defaultMonth(); sim.payday = 25; sim.paydayMult = 2;
+    sim.dateStr = new Date().toISOString().slice(0, 10);
+    sim.history = []; sim._histT = null;
     segSetActive("base-seg", "styled"); segSetActive("tool-seg", "select");
     document.getElementById("btn-draw-bldg").classList.remove("primary");
     document.getElementById("occ").value = 40; document.getElementById("occ-val").textContent = 40;
@@ -1477,6 +1815,15 @@
     if (typeof p.occupancyFrac === "number") state.occupancyFrac = p.occupancyFrac;
     const t = p.traffic || {};
     if (t.arrivalRate != null) sim.arrivalRate = t.arrivalRate;
+    sim.arrivalCurve = (Array.isArray(t.arrivalCurve) && t.arrivalCurve.length === 24) ? t.arrivalCurve.slice() : defaultCurve(sim.arrivalRate);
+    { const ch = t.clock != null ? t.clock : 8; sim.clockStart = ((ch - sim.t / 60) % 24 + 24) % 24; }
+    sim.weekMult = (Array.isArray(t.weekMult) && t.weekMult.length === 7) ? t.weekMult.slice() : defaultWeek();
+    sim.monthMult = (Array.isArray(t.monthMult) && t.monthMult.length === 12) ? t.monthMult.slice() : defaultMonth();
+    sim.payday = t.payday != null ? t.payday : 25;
+    sim.paydayMult = t.paydayMult != null ? t.paydayMult : 2;
+    sim.dateStr = t.dateStr || new Date().toISOString().slice(0, 10);
+    sim.history = []; sim._histT = null;
+    setSlider("payday", "payday-val", sim.payday); setSlider("payday-x", "payday-x-val", sim.paydayMult);
     if (t.dwellMin != null) sim.dwellMin = t.dwellMin;
     if (t.speedKmh != null) sim.speedKmh = t.speedKmh;
     if (t.followSec != null) sim.followSec = t.followSec;
@@ -1489,7 +1836,6 @@
     segSetActive("tool-seg", "select"); state.tool = "select";
     document.getElementById("btn-draw-bldg").classList.remove("primary");
     setSlider("occ", "occ-val", Math.round(state.occupancyFrac * 100));
-    setSlider("arr", "arr-val", sim.arrivalRate);
     setSlider("dwell", "dwell-val", sim.dwellMin);
     setSlider("speed", "speed-val", sim.speedKmh);
     setSlider("follow", "follow-val", sim.followSec);
@@ -1551,6 +1897,24 @@
     }
   });
   document.getElementById("btn-deselect").addEventListener("click", deselectCar);
+  rangeBind("attract", "attract-val", (v) => {
+    if (state.selection && state.selection.type === "building") {
+      state.buildings[state.selection.index].attract = v / 100;
+      scheduleSave();
+    }
+  });
+  rangeBind("open-from", "open-from-val", (v) => {
+    if (state.selection && state.selection.type === "building") {
+      state.buildings[state.selection.index].openFrom = v;
+      scheduleSave(); requestDraw();
+    }
+  });
+  rangeBind("open-to", "open-to-val", (v) => {
+    if (state.selection && state.selection.type === "building") {
+      state.buildings[state.selection.index].openTo = v;
+      scheduleSave(); requestDraw();
+    }
+  });
   rangeBind("floors", "floors-val", (v) => {
     if (state.selection && state.selection.type === "building") {
       state.buildings[state.selection.index].floors = v;

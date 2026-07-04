@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Parkeringssimulator</title>
-    <link rel="stylesheet" href="css/styles.css" />
+    <link rel="stylesheet" href="css/styles.css?v=89" />
   </head>
   <body>
     <div id="app">
@@ -17,6 +17,7 @@
           </div>
         </div>
         <div class="metrics" id="metrics">
+          <div class="metric"><span class="mv" id="m-clock">08:00</span><span class="ml" id="m-date">–</span></div>
           <div class="metric"><span class="mv" id="m-stalls">0</span><span class="ml">p-platser</span></div>
           <div class="metric"><span class="mv" id="m-ratio">0</span><span class="ml">/1000 m² BTA</span></div>
           <div class="metric"><span class="mv" id="m-gfa">0</span><span class="ml">BTA m²</span></div>
@@ -31,6 +32,20 @@
           <canvas id="canvas"></canvas>
           <div id="map-search" hidden>
             <input id="map-search-input" type="search" placeholder="🔍 Navigera till en plats…" autocomplete="off" />
+          </div>
+          <div id="history-view" hidden>
+            <div class="hv-head">
+              <h3>Historik</h3>
+              <span class="hv-info" id="hv-info"></span>
+              <button id="hv-close" class="ghost">✕ Stäng</button>
+            </div>
+            <div class="hv-legend">
+              <label><span class="hv-swatch" style="background:#3b5bdb"></span><input type="checkbox" id="hv-c" checked /> Rullande</label>
+              <label><span class="hv-swatch" style="background:#2b8a3e"></span><input type="checkbox" id="hv-p" checked /> Parkerade</label>
+              <label><span class="hv-swatch" style="background:#e03131"></span><input type="checkbox" id="hv-q" checked /> Kö</label>
+              <span class="hv-info">Grå band = natt (22–06) · streck = midnatt · håll muspekaren över för avläsning</span>
+            </div>
+            <canvas id="hv-canvas"></canvas>
           </div>
         </div>
 
@@ -72,6 +87,19 @@
               <div class="field" id="floors-field" hidden>
                 <label>Våningar: <span id="floors-val">1</span></label>
                 <input type="range" id="floors" min="1" max="6" step="1" value="1" />
+              </div>
+              <div class="field" id="attract-field" hidden>
+                <label>Attraktionskraft: <span id="attract-val">100</span> %</label>
+                <input type="range" id="attract" min="10" max="300" step="5" value="100" />
+                <p class="hint">Hur starkt byggnaden drar besökare relativt sin storlek — en matbutik drar mer än ett kontor.</p>
+              </div>
+              <div class="field" id="open-field" hidden>
+                <label>Öppet: <span id="open-from-val">0</span>–<span id="open-to-val">24</span></label>
+                <div class="row">
+                  <input type="range" id="open-from" min="0" max="24" step="1" value="0" />
+                  <input type="range" id="open-to" min="0" max="24" step="1" value="24" />
+                </div>
+                <p class="hint">Stängd byggnad lockar inga besökare. Från &gt; till = öppet över midnatt. 0–24 = alltid öppet.</p>
               </div>
             </section>
 
@@ -155,8 +183,28 @@
                 <input type="range" id="occ" min="0" max="100" step="1" value="40" />
               </div>
               <div class="field">
-                <label>Ankomst: <span id="arr-val">40</span> bilar/min</label>
-                <input type="range" id="arr" min="0" max="150" step="5" value="40" />
+                <label>Ankomster över dygnet · kl <span id="clock-val">08:00</span> · <span id="curve-val">40</span> bilar/min</label>
+                <canvas id="arr-curve" style="width:100%;height:76px;display:block;background:#f6f7fb;border:1px solid #dfe3ea;border-radius:6px;cursor:crosshair;touch-action:none"></canvas>
+                <input type="range" id="clock" min="0" max="23.95" step="0.05" value="8" />
+                <p class="hint">Dra i kurvan för att forma dygnets ankomster. Reglaget flyttar klockan; linjen visar var på dygnet simuleringen är.</p>
+              </div>
+              <div class="field">
+                <label>Datum: <span id="date-label">–</span> · kalenderfaktor ×<span id="cal-mult">1.0</span></label>
+                <input type="date" id="sim-date" />
+              </div>
+              <div class="field">
+                <label>Veckodag (mån–sön): ×<span id="week-x">1.0</span> idag</label>
+                <canvas id="week-curve" style="width:100%;height:44px;display:block;background:#f6f7fb;border:1px solid #dfe3ea;border-radius:6px;cursor:crosshair;touch-action:none"></canvas>
+              </div>
+              <div class="field">
+                <label>Månad (jan–dec): ×<span id="month-x">1.0</span> nu</label>
+                <canvas id="month-curve" style="width:100%;height:44px;display:block;background:#f6f7fb;border:1px solid #dfe3ea;border-radius:6px;cursor:crosshair;touch-action:none"></canvas>
+                <p class="hint">Dra i staplarna: t.ex. måndag ×0.5, fredag ×1.5, december julhandel, januari fattigast. Skala 0–3×.</p>
+              </div>
+              <div class="field">
+                <label>Lönedag: <span id="payday-val">25</span>:e · ×<span id="payday-x-val">2.0</span></label>
+                <input type="range" id="payday" min="1" max="31" step="1" value="25" />
+                <input type="range" id="payday-x" min="1" max="5" step="0.1" value="2" />
               </div>
               <div class="field">
                 <label>Uppehåll: <span id="dwell-val">20</span> min</label>
@@ -179,6 +227,10 @@
                 <button id="btn-treset" class="ghost">Nollställ</button>
               </div>
               <p class="hint" id="sim-hint" hidden></p>
+              <div class="field">
+                <label>Historik: <span style="color:#3b5bdb">rullande</span> · <span style="color:#2b8a3e">parkerade</span> · <span style="color:#e03131">kö</span> — <a href="#" id="hv-open">större vy ⤢</a></label>
+                <canvas id="stats-chart" style="width:100%;height:90px;display:block;background:#f6f7fb;border:1px solid #dfe3ea;border-radius:6px"></canvas>
+              </div>
               <div class="tstats">
                 <div><span class="tv" id="t-circ">0</span><span class="tl">rullande</span></div>
                 <div><span class="tv" id="t-park">0</span><span class="tl">parkerade</span></div>
@@ -276,11 +328,11 @@
       </div>
     </div>
 
-    <script src="js/geometry.js?v=86"></script>
-    <script src="js/parking.js?v=86"></script>
-    <script src="js/traffic.js?v=86"></script>
-    <script src="js/render.js?v=86"></script>
-    <script src="js/report.js?v=86"></script>
-    <script src="js/app.js?v=86"></script>
+    <script src="js/geometry.js?v=89"></script>
+    <script src="js/parking.js?v=89"></script>
+    <script src="js/traffic.js?v=89"></script>
+    <script src="js/render.js?v=89"></script>
+    <script src="js/report.js?v=89"></script>
+    <script src="js/app.js?v=89"></script>
   </body>
 </html>

@@ -42,6 +42,13 @@
     // Mirror the current tuning so the grade reflects what the user set.
     if (live) {
       sim.arrivalRate = live.arrivalRate; sim.dwellMin = live.dwellMin; sim.speedKmh = live.speedKmh;
+      // With a day curve, grade the DESIGN CASE: rush hour (the curve's peak),
+      // with the clock pinned at that hour so opening hours apply correctly.
+      if (Array.isArray(live.arrivalCurve) && live.arrivalCurve.length === 24) {
+        let pk = 0, ph = 15;
+        for (let i = 0; i < 24; i++) if (live.arrivalCurve[i] > pk) { pk = live.arrivalCurve[i]; ph = i; }
+        sim.arrivalRate = Math.max(1, pk); sim.clockStart = ph;
+      }
       sim.meanAggr = live.meanAggr; sim.meanCaution = live.meanCaution;
       sim.traitSpread = live.traitSpread; sim.allowOvertake = live.allowOvertake;
     }

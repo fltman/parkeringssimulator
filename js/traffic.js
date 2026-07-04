@@ -13,6 +13,15 @@
  */
 (function () {
   const PS = (window.PS = window.PS || {});
+
+  // Is building b open at hour h (0-24)? from > to wraps past midnight;
+  // unset or from === to (or full 0-24) = always open.
+  PS.buildingOpen = function (b, h) {
+    const from = b.openFrom != null ? b.openFrom : 0;
+    const to = b.openTo != null ? b.openTo : 24;
+    if (from === to || (from === 0 && to === 24)) return true;
+    return from < to ? (h >= from && h < to) : (h >= from || h < to);
+  };
   const g = PS.geom;
 
   // Vehicle + following constants (metres / seconds).
@@ -536,6 +545,13 @@
       t: 0, dt: 0.15, tempo: 20,
       seed: 1337, rng: mulberry32(1337),
       arrivalRate: 40, dwellMin: 20, speedKmh: 15, followSec: 1.5,
+      clockStart: 8,        // time of day (hours) at sim.t = 0 — 1 sim-second = 1 clock-minute
+      arrivalCurve: null,   // 24 hourly arrival rates (cars/min); null = flat arrivalRate
+      dateStr: null,        // current sim date "YYYY-MM-DD" (null = app sets today); advances at midnight
+      weekMult: null,       // 7 weekday multipliers, Monday first (null = app default)
+      monthMult: null,      // 12 month multipliers, January first (null = app default)
+      payday: 25,           // day of month with a spending spike...
+      paydayMult: 2,        // ...and how hard it hits (x)
       // Driver-population traits (means in [0,1]) + how much they vary per car.
       meanAggr: 0.5, meanCaution: 0.4, traitSpread: 0.35, allowOvertake: true,
       cars: [], peds: [], net: null, selectedCar: null,
@@ -868,11 +884,47 @@
       return Math.max(1, fp); // never 0/NaN, so every building keeps some weight
     }
     // Pick a destination building, weighted by floor area (bigger = busier).
+    // ---- time of day ---------------------------------------------------
+    // 1 sim-second = 1 clock-minute: a full day passes in 24 sim-minutes,
+    // which is watchable at high tempo and slow enough to see rush hours.
+    sim.hourNow = () => (((sim.clockStart || 0) + sim.t / 60) % 24 + 24) % 24;
+    // Arrival rate at hour h — linear blend between the curve's hourly buckets.
+    function curveAt(h) {
+      const c = sim.arrivalCurve;
+      if (!c || c.length !== 24) return sim.arrivalRate;
+      const i0 = Math.floor(h) % 24, i1 = (i0 + 1) % 24, f = h - Math.floor(h);
+      return c[i0] + (c[i1] - c[i0]) * f;
+    }
+    sim.curveAt = curveAt;
+    // ---- calendar (weekday / month / payday multipliers) -----------------
+    sim.dateNow = () => new Date((sim.dateStr || "2026-01-01") + "T12:00:00");
+    // Combined calendar multiplier for the current date. Weekday is Monday-
+    // first (JS getDay() is Sunday-first); every part defaults to 1.
+    sim.calMult = function () {
+      const d = sim.dateNow();
+      const wi = (d.getDay() + 6) % 7;
+      const w = (sim.weekMult && sim.weekMult.length === 7) ? sim.weekMult[wi] : 1;
+      const m = (sim.monthMult && sim.monthMult.length === 12) ? sim.monthMult[d.getMonth()] : 1;
+      const p = (sim.payday && d.getDate() === sim.payday) ? (sim.paydayMult || 1) : 1;
+      return { w, m, p, total: w * m * p, weekday: wi, month: d.getMonth(), dom: d.getDate() };
+    };
+    function advanceDate(days) {
+      const d = sim.dateNow(); d.setDate(d.getDate() + days);
+      sim.dateStr = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+    }
     function chooseDestBuilding() {
       const b = state.buildings;
       if (!b.length) return -1;
+      // Weight = floor area x attractiveness (a grocery pulls harder than an
+      // office of the same size), gated on opening hours — a closed building
+      // attracts nobody. All closed -> -1 (the arrival loop trickles).
+      const h = sim.hourNow();
       let tot = 0;
-      const w = b.map((x) => { const a = footprint(x) * (x.floors || 1); tot += a; return a; });
+      const w = b.map((x) => {
+        const a = footprint(x) * (x.floors || 1) * (x.attract != null ? x.attract : 1) * (PS.buildingOpen(x, h) ? 1 : 0);
+        tot += a; return a;
+      });
+      if (tot <= 0) return -1;
       let r = sim.rng() * tot;
       for (let i = 0; i < b.length; i++) { r -= w[i]; if (r <= 0) return i; }
       return b.length - 1;
@@ -1078,6 +1130,11 @@
     function step(dt) {
       if (!sim.net) return; // no drivable network yet (e.g. manual mode, no roads)
       sim.t += dt;
+      { // clock rolled past midnight -> next calendar day
+        const hNow = sim.hourNow();
+        const hPrev = ((((sim.clockStart || 0) + (sim.t - dt) / 60) % 24) + 24) % 24;
+        if (hNow < hPrev - 12) advanceDate(1);
+      }
 
       // Clear finished crashes (the wreck is towed away).
       for (const car of sim.cars) {
@@ -1096,7 +1153,13 @@
       if (nEnt) {
         if (!sim._gateAcc || sim._gateAcc.length !== nEnt) sim._gateAcc = new Array(nEnt).fill(0);
         if (!sim._gateWait || sim._gateWait.length !== nEnt) sim._gateWait = new Array(nEnt).fill(0);
-        const per = (sim.arrivalRate / 60) * dt / nEnt;
+        // Arrivals follow the day curve; when every building is closed only a
+        // trickle shows up (staff, confused people, people who can't read signs).
+        const hArr = sim.hourNow();
+        let rateNow = curveAt(hArr) * sim.calMult().total;
+        if (state.buildings.length && !state.buildings.some((x) => PS.buildingOpen(x, hArr))) rateNow *= 0.05;
+        sim._rateNow = rateNow;
+        const per = (rateNow / 60) * dt / nEnt;
         for (let k = 0; k < nEnt; k++) {
           sim._gateAcc[k] = Math.min(4, sim._gateAcc[k] + per);
           while (sim._gateAcc[k] >= 1) { if (spawnCarAt(k)) { sim._gateAcc[k] -= 1; sim._gateWait[k] = 0; } else break; }
@@ -1517,6 +1580,13 @@
         if (car.state === "parked") parked++;
         else if (car.state === "toStall" || car.state === "toExit") { circ++; if (car.v < 0.4 || (car.crawl || 0) > 3) queue++; }
       }
+      // Rolling history for the time-series chart (sampled, bounded).
+      if (!sim.history) sim.history = [];
+      if (sim.t - (sim._histT != null ? sim._histT : -1e9) >= 20) {
+        sim._histT = sim.t;
+        sim.history.push({ t: sim.t, h: sim.hourNow(), c: circ, p: parked, q: queue });
+        if (sim.history.length > 4320) sim.history.shift(); // 24 h at 20 s sampling
+      }
       const total = state.parking.stalls.length || 1;
       sim.stats = {
         circulating: circ, parked, queuing: queue,
@@ -1558,11 +1628,14 @@
       }
     };
     sim.reseed = function (seed) {
+      const hold = sim.hourNow ? sim.hourNow() : (sim.clockStart || 8); // reset the TRAFFIC, not the time of day
       sim.seed = seed; sim.rng = mulberry32(seed);
-      sim.t = 0; sim.parkedTotal = 0; sim.turnedAway = 0; sim.collisions = 0; sim.gaveUp = 0; sim._arrAcc = 0; sim.recentSearch = [];
+      sim.t = 0;
+      sim.clockStart = hold; sim.parkedTotal = 0; sim.turnedAway = 0; sim.collisions = 0; sim.gaveUp = 0; sim._arrAcc = 0; sim.recentSearch = [];
       // Clear the cars too — reseeding only the peds orphaned ped-driven
       // parked cars (their departAt stayed pinned at Infinity forever).
       sim.cars = []; sim.selectedCar = null;
+      sim.history = []; sim._histT = null;
       if (state.parking) for (const s of state.parking.stalls) s.reserved = false;
       sim.peds = []; sim.conflict.clear(); sim._crashPts = []; sim.entCount = null; sim._gateAcc = null; sim._gateWait = null; sim.visitTotals = {}; sim.reroutes = 0; sim.settles = 0; sim.diverted = 0;
     };

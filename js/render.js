@@ -227,23 +227,27 @@
     ctx.fillStyle = "#fff"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText(txt, sx, sy);
   }
-  function drawBuildings(ctx, cam, buildings, selection, visitors, totals) {
+  function drawBuildings(ctx, cam, buildings, selection, visitors, totals, hour) {
     for (let i = 0; i < buildings.length; i++) {
       const b = buildings[i];
       const sel = selection && selection.type === "building" && selection.index === i;
       const nv = visitors ? visitors[i] : 0;
       const tv = totals ? (totals[i] || 0) : 0;
+      // Closed right now (per opening hours)? Dim it and tag the label.
+      const closed = hour != null && PS.buildingOpen && !PS.buildingOpen(b, hour);
       if (b.poly && b.poly.length >= 3) {
         polyPath(ctx, cam, b.poly);
+        ctx.save(); if (closed) ctx.globalAlpha = 0.45;
         ctx.fillStyle = b.fill || BUILDING_FILLS[i % BUILDING_FILLS.length];
         ctx.fill();
+        ctx.restore();
         ctx.strokeStyle = sel ? COLORS.siteLine : "rgba(60,70,60,0.55)";
         ctx.lineWidth = sel ? 2.5 : 1.5; ctx.stroke();
         const c = g.centroid(b.poly), cs = PS.w2s(cam, c[0], c[1]);
         const gfa = Math.round(g.area(b.poly) * (b.floors || 1));
         ctx.fillStyle = "rgba(40,50,40,0.85)"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
         ctx.font = "600 12px system-ui, sans-serif"; ctx.fillText(b.name || "Byggnad", cs[0], cs[1] - 8);
-        ctx.font = "11px system-ui, sans-serif"; ctx.fillText("BTA " + gfa.toLocaleString() + " m²", cs[0], cs[1] + 8);
+        ctx.font = "11px system-ui, sans-serif"; ctx.fillText(closed ? "Stängt" : "BTA " + gfa.toLocaleString() + " m²", cs[0], cs[1] + 8);
         if (nv > 0 || tv > 0) drawVisitorBadge(ctx, cs[0], cs[1] - 24, nv, tv);
         continue;
       }
@@ -252,8 +256,10 @@
       ctx.save();
       ctx.translate(s[0], s[1]);
       ctx.rotate((b.rot || 0) * Math.PI / 180);
+      if (closed) ctx.globalAlpha = 0.45;
       ctx.fillStyle = b.fill || BUILDING_FILLS[i % BUILDING_FILLS.length];
       ctx.fillRect(-w / 2, -h / 2, w, h);
+      ctx.globalAlpha = 1;
       ctx.strokeStyle = sel ? COLORS.siteLine : "rgba(60,70,60,0.55)";
       ctx.lineWidth = sel ? 2.5 : 1.5;
       ctx.strokeRect(-w / 2, -h / 2, w, h);
@@ -263,7 +269,7 @@
       ctx.font = "600 12px system-ui, sans-serif";
       ctx.fillText(b.name || "Byggnad", 0, -8);
       ctx.font = "11px system-ui, sans-serif";
-      ctx.fillText("BTA " + gfa.toLocaleString() + " m²", 0, 8);
+      ctx.fillText(closed ? "Stängt" : "BTA " + gfa.toLocaleString() + " m²", 0, 8);
       ctx.restore();
       if (nv > 0 || tv > 0) drawVisitorBadge(ctx, s[0], s[1] - 24, nv, tv); // upright, in screen space
     }
@@ -544,7 +550,8 @@
       }
     }
     const visitTotals = state.traffic && state.traffic.visitTotals;
-    drawBuildings(ctx, cam, state.buildings, state.selection, visitors, visitTotals);
+    drawBuildings(ctx, cam, state.buildings, state.selection, visitors, visitTotals,
+      state.traffic && state.traffic.hourNow ? state.traffic.hourNow() : null);
     // Entrance markers: where each building's visitors walk in (this is the
     // point parking is drawn toward). Small door-coloured dot on the edge.
     if (state.traffic && state.traffic.net && state.traffic.net.doors) {

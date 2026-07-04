@@ -254,3 +254,15 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   .metrics { display: none; }
   #panel { width: 240px; }
 }
+
+/* ---- dedicated history view (overlay over the stage) ---- */
+#history-view { position: absolute; inset: 18px; background: #fff; border: 1px solid #d9dde5; border-radius: 10px; box-shadow: 0 12px 40px rgba(15,17,22,0.18); z-index: 900; display: flex; flex-direction: column; padding: 12px 14px; }
+#history-view[hidden] { display: none; }
+.hv-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.hv-head h3 { margin: 0; font-size: 14px; }
+.hv-head .hv-info { color: #6b7280; font-size: 12px; flex: 1; }
+.hv-legend { display: flex; gap: 14px; font-size: 12px; align-items: center; margin-bottom: 6px; }
+.hv-legend label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.hv-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+#hv-canvas { flex: 1 1 0; min-height: 0; width: 100%; cursor: crosshair; }
+#stats-chart { cursor: zoom-in; }

@@ -1074,12 +1074,25 @@
         return { k, d: Math.hypot(s.cx - door[0], s.cy - door[1]) };
       });
       scored.sort((a, b) => a.d - b.d);
-      // Walk outward from the door and keep the 10 nearest *reachable* stalls.
+      // Walk outward from the door and keep the nearest *reachable* stalls. When
+      // the lot is jamming, widen the pool so the congestion pass below has room
+      // to steer away from a backed-up section (dij is congestion-weighted then).
+      const congested = dij && (sim._maxCong || 0) > 0.3;
       const ok = [];
       for (const sc of scored) {
-        if (reach(sc.k)) { ok.push(sc); if (ok.length >= 10) break; }
+        if (reach(sc.k)) { ok.push(sc); if (ok.length >= (congested ? 28 : 10)) break; }
       }
       if (!ok.length) return strict ? -1 : scored[0].k; // nothing reachable — caller turns the car away
+      // Don't overfeed a section whose approach is already jammed: among the
+      // near-door reachable stalls, prefer the half with the lowest congestion-
+      // weighted drive cost, so fresh arrivals spread to a clearer section
+      // instead of piling onto a queue that then spills back onto the ring.
+      if (congested && ok.length > 4) {
+        for (const o of ok) o.c = costTo(o.k, dij);
+        ok.sort((a, b) => a.c - b.c);
+        const half = ok.slice(0, Math.max(4, Math.ceil(ok.length / 2)));
+        return half[Math.floor(sim.rng() * half.length)].k;
+      }
       return ok[Math.floor(sim.rng() * ok.length)].k;
     }
     // Preferred type first (an EV heads for a free charger, a permit holder for

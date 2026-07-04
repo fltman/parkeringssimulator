@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Parkeringssimulator</title>
-    <link rel="stylesheet" href="css/styles.css?v=101" />
+    <link rel="stylesheet" href="css/styles.css?v=104" />
   </head>
   <body>
     <div id="app">
@@ -88,6 +88,10 @@
                 <button id="btn-del" class="ghost" disabled>Ta bort markerad</button>
               </div>
               <p class="hint" id="sel-hint">"+ Byggnad" ger en fyrkant att flytta / skala / rotera. "Rita" ritar en byggnad som polygon (klicka ut hörn, dubbelklick avslutar).</p>
+              <div class="field" id="bname-field" hidden>
+                <label>Namn</label>
+                <input type="text" id="bname" autocomplete="off" placeholder="t.ex. Matbutiken" />
+              </div>
               <div class="field" id="floors-field" hidden>
                 <label>Våningar: <span id="floors-val">1</span></label>
                 <input type="range" id="floors" min="1" max="6" step="1" value="1" />
@@ -97,6 +101,7 @@
                 <input type="range" id="attract" min="10" max="1000" step="10" value="100" />
                 <p class="hint">Hur starkt byggnaden drar besökare relativt sin storlek — en matbutik drar mer än ett kontor.</p>
               </div>
+              <label class="check" id="bclosed-field" hidden><input type="checkbox" id="bclosed" /> Stängd — inga besökare (vakant lokal)</label>
               <div class="field" id="open-field" hidden>
                 <label>Öppet: <span id="open-from-val">0</span>–<span id="open-to-val">24</span></label>
                 <div class="row">
@@ -382,11 +387,11 @@
       </div>
     </div>
 
-    <script src="js/geometry.js?v=101"></script>
-    <script src="js/parking.js?v=101"></script>
-    <script src="js/traffic.js?v=101"></script>
-    <script src="js/render.js?v=101"></script>
-    <script src="js/report.js?v=101"></script>
-    <script src="js/app.js?v=101"></script>
+    <script src="js/geometry.js?v=104"></script>
+    <script src="js/parking.js?v=104"></script>
+    <script src="js/traffic.js?v=104"></script>
+    <script src="js/render.js?v=104"></script>
+    <script src="js/report.js?v=104"></script>
+    <script src="js/app.js?v=104"></script>
   </body>
 </html>

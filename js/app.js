@@ -921,16 +921,21 @@
     // or a selected road looks undeletable (Delete-key only, undocumented).
     const canDel = sel && ["building", "gate", "section", "road", "round"].includes(sel.type);
     document.getElementById("btn-del").disabled = !canDel;
+    document.getElementById("bname-field").hidden = !selB;
     document.getElementById("floors-field").hidden = !selB;
     document.getElementById("attract-field").hidden = !selB;
+    document.getElementById("bclosed-field").hidden = !selB;
     document.getElementById("open-field").hidden = !selB;
     if (selB) {
       const b = state.buildings[sel.index];
+      const bn = document.getElementById("bname");
+      if (document.activeElement !== bn) bn.value = b.name || "";
       document.getElementById("floors").value = b.floors || 1;
       document.getElementById("floors-val").textContent = b.floors || 1;
       const at = Math.round((b.attract != null ? b.attract : 1) * 100);
       document.getElementById("attract").value = at;
       document.getElementById("attract-val").textContent = at;
+      document.getElementById("bclosed").checked = !!b.closed;
       const of2 = b.openFrom != null ? b.openFrom : 0, ot = b.openTo != null ? b.openTo : 24;
       document.getElementById("open-from").value = of2; document.getElementById("open-from-val").textContent = of2;
       document.getElementById("open-to").value = ot; document.getElementById("open-to-val").textContent = ot;
@@ -2183,6 +2188,18 @@
     }
   });
   document.getElementById("btn-deselect").addEventListener("click", deselectCar);
+  document.getElementById("bname").addEventListener("input", (e) => {
+    if (state.selection && state.selection.type === "building") {
+      state.buildings[state.selection.index].name = e.target.value.trim() || ("Byggnad " + (state.selection.index + 1));
+      requestDraw(); scheduleSave();
+    }
+  });
+  document.getElementById("bclosed").addEventListener("change", (e) => {
+    if (state.selection && state.selection.type === "building") {
+      state.buildings[state.selection.index].closed = e.target.checked || undefined;
+      requestDraw(); scheduleSave();
+    }
+  });
   rangeBind("attract", "attract-val", (v) => {
     if (state.selection && state.selection.type === "building") {
       state.buildings[state.selection.index].attract = v / 100;

@@ -17,6 +17,7 @@
   // Is building b open at hour h (0-24)? from > to wraps past midnight;
   // unset or from === to (or full 0-24) = always open.
   PS.buildingOpen = function (b, h) {
+    if (b.closed) return false; // manually closed (vacant) — no visitors, ever
     const from = b.openFrom != null ? b.openFrom : 0;
     const to = b.openTo != null ? b.openTo : 24;
     if (from === to || (from === 0 && to === 24)) return true;
@@ -972,13 +973,23 @@
       const d = sim.dateNow(); d.setDate(d.getDate() + days);
       sim.dateStr = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
     }
+    // The clock hour a car spawning NOW is likely to ARRIVE at: with the
+    // compressed clock (1 sim-s = 1 clock-min) the drive itself takes
+    // clock-hours, so plans must be made against arrival-time openness —
+    // not spawn-time. Lead = the fleet's recent spawn->parked time.
+    function estArrivalHour() {
+      const rs = sim.recentSearch;
+      const lead = g.clamp(rs && rs.length ? rs.reduce((a2, b2) => a2 + b2, 0) / rs.length : 60, 20, 240);
+      return (sim.hourNow() + lead / 60) % 24;
+    }
     function chooseDestBuilding() {
       const b = state.buildings;
       if (!b.length) return -1;
       // Weight = floor area x attractiveness (a grocery pulls harder than an
-      // office of the same size), gated on opening hours — a closed building
-      // attracts nobody. All closed -> -1 (the arrival loop trickles).
-      const h = sim.hourNow();
+      // office of the same size), gated on opening hours AT ESTIMATED ARRIVAL
+      // — a shop opening soon draws pre-opening traffic, one about to close
+      // stops drawing it. All closed -> -1 (the arrival loop trickles).
+      const h = estArrivalHour();
       let tot = 0;
       const w = b.map((x) => {
         const a = footprint(x) * (x.floors || 1) * (x.attract != null ? x.attract : 1) * (PS.buildingOpen(x, h) ? 1 : 0);
@@ -1222,7 +1233,8 @@
         // trickle shows up (staff, confused people, people who can't read signs).
         const hArr = sim.hourNow();
         let rateNow = curveAt(hArr) * sim.calMult().total;
-        if (state.buildings.length && !state.buildings.some((x) => PS.buildingOpen(x, hArr))) rateNow *= 0.05;
+        const hEta = estArrivalHour();
+        if (state.buildings.length && !state.buildings.some((x) => PS.buildingOpen(x, hEta))) rateNow *= 0.05;
         sim._rateNow = rateNow;
         const per = (rateNow / 60) * dt / nEnt;
         for (let k = 0; k < nEnt; k++) {

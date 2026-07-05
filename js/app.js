@@ -105,7 +105,6 @@
     sections: [],
     roundabouts: [],
     crossings: [],        // marked pedestrian crossings snapped onto roads: {x, y, dx, dy}
-    stallTypes: { ev: 0, hc: 0, staff: 0 }, // share of stalls per type (%)
     _draft: null,
   };
   state.decor = buildDecor(state.site);
@@ -140,7 +139,7 @@
         drag.type === "resizerect" || drag.type === "rotrect" || drag.type === "section");
       if (dragging) regen._netStale = true;
       else if (state.traffic.running) state.traffic.rebuild();
-      else { state.traffic.net = PS.buildNetwork(state); PS.assignStallTypes(state, state.traffic.net); }
+      else { state.traffic.net = PS.buildNetwork(state); PS.assignStallTypes(state, state.traffic.net); if (state.traffic._runStarted) state.traffic._dirtySincePause = true; }
     }
     updateMetrics();
     scheduleSave();
@@ -220,6 +219,8 @@
   const BASES = {
     // Clean light street map (CARTO Positron) — reads well under the lot overlay.
     map: { url: "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", attribution: "© OpenStreetMap © CARTO", maxZoom: 20, subdomains: "abcd" },
+    // Dark counterpart (CARTO Dark Matter) — used when the app is in dark mode.
+    mapDark: { url: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", attribution: "© OpenStreetMap © CARTO", maxZoom: 20, subdomains: "abcd" },
     osm: { url: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", attribution: "© OpenStreetMap", maxZoom: 19 },
   };
   function initMap() {
@@ -232,7 +233,9 @@
   }
   function setBase(layerKind) {
     if (state._base) { state.map.removeLayer(state._base); state._base = null; }
-    const b = BASES[layerKind] || BASES.map;
+    // In dark mode the plain street map switches to CARTO Dark Matter.
+    let b = BASES[layerKind] || BASES.map;
+    if (state.dark && (layerKind === "map" || !layerKind)) b = BASES.mapDark;
     const opts = { attribution: b.attribution, maxZoom: b.maxZoom };
     if (b.subdomains) opts.subdomains = b.subdomains;
     state._base = L.tileLayer(b.url, opts).addTo(state.map);
@@ -555,6 +558,90 @@
     if (Math.hypot(eS[0] - scr[0], eS[1] - scr[1]) <= HANDLE_PX + 2) return "radius";
     return null;
   }
+  // ---- stacked-object picker: every selectable thing under a world point -----
+  // Returns hits topmost-first (z reflects draw order), so overlapping layers
+  // can be disambiguated with a little menu instead of always grabbing whatever
+  // the fixed hit-test priority happened to reach first.
+  function objectsAt(w) {
+    const hits = [];
+    for (let i = 0; i < (state.gates || []).length; i++) {
+      const g2 = state.gates[i];
+      if (Math.hypot(g2.x - w[0], g2.y - w[1]) < 6) hits.push({ type: "gate", index: i, z: 6, label: (g2.type === "in" ? "🟢 Infart" : "🟠 Utfart") + " " + (i + 1) });
+    }
+    for (let i = 0; i < (state.crossings || []).length; i++) {
+      const c = state.crossings[i];
+      if (Math.hypot(c.x - w[0], c.y - w[1]) < 5) hits.push({ type: "cross", index: i, z: 5, label: "🚸 Övergångsställe" });
+    }
+    for (let i = 0; i < state.buildings.length; i++) {
+      const b = state.buildings[i];
+      const inside = b.poly && b.poly.length >= 3 ? g.pointInPolygon(w, b.poly) : g.pointInRect(w[0], w[1], b.x + b.w / 2, b.y + b.h / 2, b.w, b.h, b.rot || 0);
+      if (inside) hits.push({ type: "building", index: i, z: 4, label: "🏢 " + (b.name || ("Byggnad " + (i + 1))) });
+    }
+    for (let i = 0; i < state.roundabouts.length; i++) {
+      const rb = state.roundabouts[i];
+      if (Math.abs(Math.hypot(w[0] - rb.x, w[1] - rb.y) - rb.r) < 6) hits.push({ type: "round", index: i, z: 3, label: "🔄 Rondell " + (i + 1) });
+    }
+    for (let i = 0; i < state.roads.length; i++) {
+      const r = state.roads[i];
+      let hit = false;
+      for (let k = 0; k < r.length - 1; k++) if (g.distPointToSegment(w, r[k], r[k + 1]) < 4) { hit = true; break; }
+      if (hit) hits.push({ type: "road", index: i, z: 2, label: "🛣️ Väg " + (i + 1) + (r.lanes && r.lanes !== "1+1" ? " (" + r.lanes + ")" : "") });
+    }
+    for (let i = 0; i < state.sections.length; i++) {
+      if (pointInSection(w, state.sections[i])) hits.push({ type: "section", index: i, z: 1, label: "🅿️ Parkering " + (i + 1) });
+    }
+    hits.sort((a, b) => b.z - a.z);
+    return hits;
+  }
+  // Select an object (optionally arming a drag) — the single entry point the
+  // stacked-picker and direct clicks both route through.
+  function beginSelect(type, index, w, allowDrag) {
+    if (state.traffic && state.traffic.selectedCar) deselectCar();
+    state.selection = { type, index };
+    drag = null;
+    if (allowDrag && w) {
+      if (type === "building") drag = { type: "move", index, lx: w[0], ly: w[1] };
+      else if (type === "section") drag = { type: "section", index, lx: w[0], ly: w[1] };
+      else if (type === "gate") drag = { type: "gate", index };
+      else if (type === "cross") drag = { type: "cross", index };
+      // road / round: select only; they move via their handles
+    }
+    syncSelectionUI();
+    requestDraw();
+  }
+  let pickMenuEl = null;
+  function closePickMenu() {
+    if (pickMenuEl) { pickMenuEl.remove(); pickMenuEl = null; }
+    window.removeEventListener("mousedown", pickMenuOutside, true);
+    window.removeEventListener("keydown", pickMenuKey, true);
+  }
+  function pickMenuOutside(ev) { if (pickMenuEl && !pickMenuEl.contains(ev.target)) closePickMenu(); }
+  function pickMenuKey(ev) { if (ev.key === "Escape") { closePickMenu(); ev.preventDefault(); } }
+  function showPickMenu(hits, cx, cy, w) {
+    closePickMenu();
+    const menu = document.createElement("div");
+    menu.className = "pick-menu";
+    menu.style.cssText = "position:fixed;z-index:1000;padding:4px;min-width:150px;max-width:260px;font:13px system-ui,sans-serif";
+    const title = document.createElement("div");
+    title.className = "pm-title";
+    title.textContent = hits.length + " objekt här — välj";
+    menu.appendChild(title);
+    for (const h of hits.slice(0, 12)) {
+      const item = document.createElement("div");
+      item.className = "pm-item";
+      item.textContent = h.label;
+      item.addEventListener("mousedown", (ev) => { ev.preventDefault(); ev.stopPropagation(); beginSelect(h.type, h.index, w, false); closePickMenu(); });
+      menu.appendChild(item);
+    }
+    document.body.appendChild(menu);
+    const r = menu.getBoundingClientRect();
+    let x = cx + 2, y = cy + 2;
+    if (x + r.width > window.innerWidth) x = window.innerWidth - r.width - 6;
+    if (y + r.height > window.innerHeight) y = window.innerHeight - r.height - 6;
+    menu.style.left = Math.max(4, x) + "px"; menu.style.top = Math.max(4, y) + "px";
+    pickMenuEl = menu;
+    setTimeout(() => { window.addEventListener("mousedown", pickMenuOutside, true); window.addEventListener("keydown", pickMenuKey, true); }, 0);
+  }
   canvas.addEventListener("mousedown", (e) => {
     const w = mouseWorld(e);
     const scr = mouseScreen(e);
@@ -618,45 +705,17 @@
       if (car) { selectCar(car); return; }
     }
 
-    // Select/move sections, roads or roundabouts (manual, select tool).
-    if (state.layoutMode === "manual" && state.tool === "select") {
-      // Crossings first — they always sit ON a road/section and would lose the hit.
-      const xi = crossAt(w);
-      if (xi >= 0) {
-        state.selection = { type: "cross", index: xi };
-        drag = { type: "cross", index: xi };
-        syncSelectionUI(); requestDraw(); return;
-      }
-      const si = sectionAt(w);
-      if (si >= 0) {
-        state.selection = { type: "section", index: si };
-        drag = { type: "section", index: si, lx: w[0], ly: w[1] };
-        syncSelectionUI(); requestDraw(); return;
-      }
-      const ri = roadAt(w);
-      if (ri >= 0) { state.selection = { type: "road", index: ri }; syncSelectionUI(); requestDraw(); return; }
-      const ci = roundAt(w);
-      if (ci >= 0) { state.selection = { type: "round", index: ci }; syncSelectionUI(); requestDraw(); return; }
-    }
-
-    // Select / drag an entrance or exit gate.
-    const gi = gateAt(w);
-    if (gi >= 0) {
-      if (state.traffic && state.traffic.selectedCar) deselectCar();
-      state.selection = { type: "gate", index: gi };
-      drag = { type: "gate", index: gi };
-      syncSelectionUI();
-      requestDraw();
-      return;
-    }
-
-    const bi = buildingAt(w);
-    if (bi >= 0) {
-      state.selection = { type: "building", index: bi };
-      drag = { type: "move", index: bi, lx: w[0], ly: w[1] };
-      syncSelectionUI();
-      requestDraw();
-      return;
+    // Objects under the cursor (topmost first). With several stacked, pop a
+    // little picker so you can choose which layer to grab; a single hit selects
+    // directly. The current selection keeps grab-priority — once picked it's
+    // what your next click drags, so it behaves as the top of the heap.
+    if (state.tool === "select") {
+      const hits = objectsAt(w);
+      const sel = state.selection;
+      const selHit = sel && hits.find((h) => h.type === sel.type && h.index === sel.index);
+      if (selHit) { beginSelect(selHit.type, selHit.index, w, true); return; }
+      if (hits.length >= 2) { showPickMenu(hits, e.clientX, e.clientY, w); return; }
+      if (hits.length === 1) { beginSelect(hits[0].type, hits[0].index, w, true); return; }
     }
 
     // Empty space: deselect + pan (in map mode, pan the map instead of the cam).
@@ -857,7 +916,7 @@
   function rebuildNet() {
     if (!state.traffic) return;
     if (state.traffic.running) state.traffic.rebuild();
-    else { state.traffic.net = PS.buildNetwork(state); PS.assignStallTypes(state, state.traffic.net); }
+    else { state.traffic.net = PS.buildNetwork(state); PS.assignStallTypes(state, state.traffic.net); if (state.traffic._runStarted) state.traffic._dirtySincePause = true; }
     requestDraw();
     scheduleSave();
   }
@@ -1025,6 +1084,10 @@
       const isl = sec.island != null ? sec.island : 11;
       document.getElementById("sec-island").value = isl;
       document.getElementById("sec-island-val").textContent = isl;
+      const st = sec.stallTypes || { hc: 0, ev: 0, staff: 0 };
+      setSlider("sec-hc", "sec-hc-val", st.hc || 0);
+      setSlider("sec-ev", "sec-ev-val", st.ev || 0);
+      setSlider("sec-staff", "sec-staff-val", st.staff || 0);
     }
   }
 
@@ -1075,8 +1138,14 @@
       return;
     }
     if (hint) hint.hidden = true;
-    applyOccupancy();
-    sim.rebuild();
+    // Resume a paused run in place — only rebuild for a FRESH run (never
+    // started, or reset) or when the layout was edited while paused (stale car
+    // paths would reference the old network). Otherwise cars continue from
+    // exactly where they were.
+    const resuming = sim._runStarted && sim.cars.length && !sim._dirtySincePause;
+    if (!resuming) { applyOccupancy(); sim.rebuild(); }
+    sim._runStarted = true;
+    sim._dirtySincePause = false;
     sim.running = true;
     lastTs = 0;
     simAcc = 0;
@@ -1112,7 +1181,9 @@
   function pauseTraffic() {
     sim.running = false;
     if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
-    document.getElementById("btn-traffic").textContent = "▶ Starta trafik";
+    sim._dirtySincePause = false; // fresh pause — track edits from here so resume knows whether to rebuild
+    // "Återuppta" once a run exists and can continue; "Starta" for a fresh/reset sim.
+    document.getElementById("btn-traffic").textContent = (sim._runStarted && sim.cars.length) ? "▶ Återuppta" : "▶ Starta trafik";
     captureLastRun();
     updateTrafficStats(); // freeze the header clock/stats at the TRUE paused state, not the last frame's
     requestDraw();
@@ -1120,11 +1191,13 @@
   function toggleTraffic() { sim.running ? pauseTraffic() : startTraffic(); }
   function resetTraffic() {
     pauseTraffic();
+    sim._runStarted = false; // next start is a fresh run
     sim.reseed(sim.seed);
     applyOccupancy();
     sim.rebuild();
     updateMetrics();
     updateTrafficStats();
+    document.getElementById("btn-traffic").textContent = "▶ Starta trafik";
     requestDraw();
   }
   function updateTrafficStats() {
@@ -1483,16 +1556,25 @@
   // ---- parking fee ----------------------------------------------------------
   rangeBind("fee", "fee-val", (v) => { sim.feePerH = v; scheduleSave(); });
 
-  // ---- stall types (hc / ev / staff) ---------------------------------------
+  // ---- stall types (hc / ev / staff) — PER SECTION -------------------------
   function retypeStalls() {
     if (state.traffic && state.traffic.net && PS.assignStallTypes) PS.assignStallTypes(state, state.traffic.net);
   }
-  function bindTypePct(id, key) {
-    rangeBind(id, id + "-val", (v) => { state.stallTypes[key] = v; retypeStalls(); requestDraw(); scheduleSave(); });
+  // Per-section sliders live in the "Vald sektion" panel; write to the selected
+  // section's own stallTypes object.
+  function bindSecTypePct(id, key) {
+    rangeBind(id, id + "-val", (v) => {
+      if (!(state.selection && state.selection.type === "section")) return;
+      const sec = state.sections[state.selection.index];
+      if (!sec.stallTypes) sec.stallTypes = { hc: 0, ev: 0, staff: 0 };
+      sec.stallTypes[key] = v;
+      retypeStalls(); requestDraw(); scheduleSave();
+    });
   }
-  bindTypePct("pt-hc", "hc");
-  bindTypePct("pt-ev", "ev");
-  bindTypePct("pt-staff", "staff");
+  bindSecTypePct("sec-hc", "hc");
+  bindSecTypePct("sec-ev", "ev");
+  bindSecTypePct("sec-staff", "staff");
+  // Fleet-wide EV behaviour lives in the Simulera tab (not per section).
   rangeBind("pt-evshare", "pt-evshare-val", (v) => { sim.evShare = v; scheduleSave(); });
   rangeBind("pt-charge", "pt-charge-val", (v) => { sim.chargeMin = v; scheduleSave(); });
 
@@ -2314,7 +2396,7 @@
       layoutMode: "manual", params: state.params, occupancyFrac: state.occupancyFrac,
       roads: (state.roads || []).map((r) => ({ pts: r.map((p) => [p[0], p[1]]), lanes: r.lanes || "1+1", speed: r.speed || null })),
       sections: state.sections, roundabouts: state.roundabouts,
-      crossings: state.crossings || [], stallTypes: state.stallTypes || null,
+      crossings: state.crossings || [],
       traffic: {
         arrivalRate: sim.arrivalRate, dwellMin: sim.dwellMin, speedKmh: sim.speedKmh, followSec: sim.followSec, tempo: sim.tempo,
         arrivalCurve: sim.arrivalCurve || null, clock: sim.hourNow ? +sim.hourNow().toFixed(2) : 8,
@@ -2399,8 +2481,6 @@
     if (state.mapMode) setBasemap("styled");
     state.site = defaultSite();
     state.buildings = []; state.gates = []; state.roads = []; state.sections = []; state.roundabouts = []; state.crossings = [];
-    state.stallTypes = { ev: 0, hc: 0, staff: 0 };
-    setSlider("pt-hc", "pt-hc-val", 0); setSlider("pt-ev", "pt-ev-val", 0); setSlider("pt-staff", "pt-staff-val", 0);
     sim.evShare = 20; sim.chargeMin = 45;
     setSlider("pt-evshare", "pt-evshare-val", 20); setSlider("pt-charge", "pt-charge-val", 45);
     state.layoutMode = "manual"; state.tool = "select"; state._draft = null; state.selection = null;
@@ -2419,6 +2499,7 @@
     document.getElementById("report").hidden = true;
     state.decor = buildDecor(state.site);
     sim.reseed(sim.seed);
+    { const bt = document.getElementById("btn-traffic"); if (bt) bt.textContent = "▶ Starta trafik"; }
     syncSelectionUI(); regen(); resize(true); updateTrafficStats(); requestDraw();
   }
   function loadProjectData(id) {
@@ -2572,6 +2653,7 @@
     let asyncMapRestore = false;
     try {
     pauseTraffic();
+    sim._runStarted = false; sim.cars = []; sim.peds = []; // a loaded project is a fresh run
     if (Array.isArray(p.site) && p.site.length >= 3) state.site = p.site;
     if (p.siteName) state.siteName = p.siteName;
     const arr = (x) => (Array.isArray(x) ? x : []);
@@ -2589,10 +2671,11 @@
     state.sections = arr(p.sections);
     state.roundabouts = arr(p.roundabouts);
     state.crossings = arr(p.crossings);
-    state.stallTypes = Object.assign({ ev: 0, hc: 0, staff: 0 }, p.stallTypes || {});
-    setSlider("pt-hc", "pt-hc-val", state.stallTypes.hc);
-    setSlider("pt-ev", "pt-ev-val", state.stallTypes.ev);
-    setSlider("pt-staff", "pt-staff-val", state.stallTypes.staff);
+    // Migrate the old GLOBAL stall-type percentages onto every section that
+    // doesn't carry its own yet (types are now set per parking area).
+    if (p.stallTypes && (p.stallTypes.hc || p.stallTypes.ev || p.stallTypes.staff)) {
+      for (const sec of state.sections) if (!sec.stallTypes) sec.stallTypes = Object.assign({ hc: 0, ev: 0, staff: 0 }, p.stallTypes);
+    }
     state.layoutMode = "manual";
     if (p.params) Object.assign(state.params, p.params);
     if (typeof p.occupancyFrac === "number") state.occupancyFrac = p.occupancyFrac;
@@ -2645,6 +2728,7 @@
     state.selection = null; state._draft = null; state._report = null;
     retailCount = state.buildings.length;
     document.getElementById("report").hidden = true;
+    { const bt = document.getElementById("btn-traffic"); if (bt) bt.textContent = "▶ Starta trafik"; }
     syncSelectionUI();
     regen();
     resize(true);
@@ -2752,6 +2836,21 @@
     state.showDims = e.target.checked;
     requestDraw();
   });
+
+  // ---- dark mode (persisted app-wide, not per project) --------------------
+  const THEME_KEY = "ps_theme";
+  function applyTheme(dark) {
+    state.dark = !!dark;
+    document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+    if (PS.setCanvasTheme) PS.setCanvasTheme(dark);
+    const cb = document.getElementById("chk-dark"); if (cb) cb.checked = !!dark;
+    // Swap the live map basemap if we're on the street map.
+    if (state.mapMode && state.map && state._base) setBase("map");
+    requestDraw();
+  }
+  { const cb = document.getElementById("chk-dark");
+    if (cb) cb.addEventListener("change", (e) => { applyTheme(e.target.checked); try { localStorage.setItem(THEME_KEY, e.target.checked ? "dark" : "light"); } catch (er) {} }); }
+  applyTheme(localStorage.getItem(THEME_KEY) === "dark");
 
   // ---- boot ---------------------------------------------------------------
   window.PSSTATE = state; // debug/testing handle

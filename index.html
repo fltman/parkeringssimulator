@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Parkeringssimulator</title>
-    <link rel="stylesheet" href="css/styles.css?v=112" />
+    <link rel="stylesheet" href="css/styles.css?v=114" />
   </head>
   <body>
     <div id="app">
@@ -142,32 +142,7 @@
               <div class="row"><button id="btn-trace" class="ghost">🗺️ Trace från kartan</button></div>
               <p class="hint" id="trace-status">I kartläge: rita en yta så hämtas verkliga byggnader och vägar därifrån (OpenStreetMap).</p>
               <div class="row"><button id="btn-clear-layout" class="ghost">Rensa layout</button></div>
-            </section>
-
-            <section>
-              <h2>Platstyper</h2>
-              <div class="field">
-                <label>♿ Handikapplatser: <span id="pt-hc-val">0</span> %</label>
-                <input type="range" id="pt-hc" min="0" max="10" step="1" value="0" />
-              </div>
-              <div class="field">
-                <label>⚡ Laddplatser (elbil): <span id="pt-ev-val">0</span> %</label>
-                <input type="range" id="pt-ev" min="0" max="30" step="1" value="0" />
-              </div>
-              <div class="field">
-                <label>👷 Personalplatser: <span id="pt-staff-val">0</span> %</label>
-                <input type="range" id="pt-staff" min="0" max="30" step="1" value="0" />
-              </div>
-              <p class="hint">Handikapplatser läggs närmast entréerna, laddplatser strax intill, personalplatser längst bort. Bara rätt förare får använda dem (~3 % har handikapptillstånd).</p>
-              <div class="field">
-                <label>Andel elbilar bland besökare: <span id="pt-evshare-val">20</span> %</label>
-                <input type="range" id="pt-evshare" min="0" max="60" step="1" value="20" />
-              </div>
-              <div class="field">
-                <label>Laddtid: <span id="pt-charge-val">45</span> min</label>
-                <input type="range" id="pt-charge" min="10" max="240" step="5" value="45" />
-                <p class="hint">Elbilar siktar på en ledig laddplats (annars vanlig plats) och står kvar tills laddningen är klar. Personal anländer före öppning och står hela arbetsdagen.</p>
-              </div>
+              <p class="hint">Platstyper (handikapp / ladd / personal) ställs per parkeringsyta — markera en yta så visas reglagen under "Vald sektion".</p>
             </section>
 
             <section id="sel-road" hidden>
@@ -228,6 +203,20 @@
                 <label>Grönska var: <span id="sec-island-val">11</span>:e plats</label>
                 <input type="range" id="sec-island" min="4" max="30" step="1" value="11" />
               </div>
+              <h3 style="font-size:13px;margin:14px 0 2px;color:#6b7280">Platstyper i denna yta</h3>
+              <div class="field">
+                <label>♿ Handikapplatser: <span id="sec-hc-val">0</span> %</label>
+                <input type="range" id="sec-hc" min="0" max="20" step="1" value="0" />
+              </div>
+              <div class="field">
+                <label>⚡ Laddplatser (elbil): <span id="sec-ev-val">0</span> %</label>
+                <input type="range" id="sec-ev" min="0" max="50" step="1" value="0" />
+              </div>
+              <div class="field">
+                <label>👷 Personalplatser: <span id="sec-staff-val">0</span> %</label>
+                <input type="range" id="sec-staff" min="0" max="50" step="1" value="0" />
+                <p class="hint">Gäller bara denna parkeringsyta: handikapp läggs närmast entré, ladd strax intill, personal längst bort.</p>
+              </div>
             </section>
 
             <section>
@@ -240,6 +229,7 @@
                 </div>
               </div>
               <label class="check"><input type="checkbox" id="chk-dims" /> Visa mått</label>
+              <label class="check"><input type="checkbox" id="chk-dark" /> 🌙 Mörkt läge</label>
               <div class="row">
                 <button id="btn-fit" class="ghost">Centrera vyn</button>
                 <button id="btn-reset" class="ghost">Återställ allt</button>
@@ -251,43 +241,13 @@
           <!-- ===================== SIMULERA ===================== -->
           <div class="tab-page" data-page="sim" hidden>
             <section>
-              <h2>Trafiksimulering</h2>
+              <h2>Kör simulering</h2>
               <div class="field">
-                <label>Startbeläggning: <span id="occ-val">40</span>%</label>
-                <input type="range" id="occ" min="0" max="100" step="1" value="40" />
-              </div>
-              <div class="field">
-                <label>Ankomster över dygnet · kl <span id="clock-val">08:00</span> · <span id="curve-val">40</span> bilar/min</label>
-                <canvas id="arr-curve" style="width:100%;height:76px;display:block;background:#f6f7fb;border:1px solid #dfe3ea;border-radius:6px;cursor:crosshair;touch-action:none"></canvas>
-                <input type="range" id="clock" min="0" max="23.95" step="0.05" value="8" />
-                <p class="hint">Dra i kurvan för att forma dygnets ankomster. Reglaget flyttar klockan; linjen visar var på dygnet simuleringen är.</p>
-              </div>
-              <div class="field">
-                <label>Datum &amp; tid: <span id="date-label">–</span> · kalenderfaktor ×<span id="cal-mult">1.0</span></label>
+                <label>Datum &amp; tid (start): <span id="date-label">–</span> · kalenderfaktor ×<span id="cal-mult">1.0</span></label>
                 <div class="row">
                   <input type="date" id="sim-date" />
                   <input type="time" id="sim-time" step="300" />
                 </div>
-              </div>
-              <div class="field">
-                <label>Veckodag (mån–sön): ×<span id="week-x">1.0</span> idag</label>
-                <canvas id="week-curve" style="width:100%;height:44px;display:block;background:#f6f7fb;border:1px solid #dfe3ea;border-radius:6px;cursor:crosshair;touch-action:none"></canvas>
-              </div>
-              <div class="field">
-                <label>Månad (jan–dec): ×<span id="month-x">1.0</span> nu</label>
-                <canvas id="month-curve" style="width:100%;height:44px;display:block;background:#f6f7fb;border:1px solid #dfe3ea;border-radius:6px;cursor:crosshair;touch-action:none"></canvas>
-                <p class="hint">Dra i staplarna: t.ex. måndag ×0.5, fredag ×1.5, december julhandel, januari fattigast. Skala 0–3×.</p>
-              </div>
-              <div class="field">
-                <label>Händelser (engångspikar)</label>
-                <div id="ev-list"></div>
-                <div class="row"><button id="ev-add" class="ghost">＋ Händelse</button></div>
-                <p class="hint">T.ex. konsert eller matchdag: datum + tidsfönster + faktor som multipliceras ovanpå kurvorna.</p>
-              </div>
-              <div class="field">
-                <label>Parkeringsavgift: <span id="fee-val">0</span> kr/h</label>
-                <input type="range" id="fee" min="0" max="50" step="1" value="0" />
-                <p class="hint">Avgift dämpar efterfrågan (~halverad vid 25 kr/h) och ger intäkt per betald timme.</p>
               </div>
               <div class="field">
                 <label>Kör till (stopptid): <span id="stop-label">–</span></label>
@@ -301,13 +261,79 @@
                   <button id="stop-month" class="ghost">+1 mån</button>
                   <button id="stop-clear" class="ghost">Rensa</button>
                 </div>
-                <p class="hint">Simuleringen pausar sig själv vid stopptiden — kör t.ex. en hel månad i ett svep och exportera kurvorna. Tomt = kör tills vidare.</p>
+                <p class="hint">Simuleringen pausar sig själv vid stopptiden — kör t.ex. en hel månad i ett svep. Tomt = kör tills vidare.</p>
+              </div>
+              <div class="field">
+                <label>Tempo: <span id="tempo-val">20</span>×</label>
+                <input type="range" id="tempo" min="0" max="100" step="1" value="37" />
+                <p class="hint">Logaritmiskt 1×–3600×. Vid max går ett dygn på under en minut, en månad på en kvart–halvtimme.</p>
+              </div>
+              <div class="row">
+                <button id="btn-traffic" class="primary">▶ Starta trafik</button>
+                <button id="btn-treset" class="ghost">Nollställ</button>
+              </div>
+              <p class="hint" id="sim-hint" hidden></p>
+              <div class="tstats">
+                <div><span class="tv" id="t-circ">0</span><span class="tl">rullande</span></div>
+                <div><span class="tv" id="t-park">0</span><span class="tl">parkerade</span></div>
+                <div><span class="tv" id="t-queue">0</span><span class="tl">i kö</span></div>
+                <div><span class="tv" id="t-search">0 s</span><span class="tl">snitt söktid</span></div>
+                <div><span class="tv" id="t-coll">0</span><span class="tl">krockar</span></div>
+                <div><span class="tv" id="t-away">0</span><span class="tl">avvisade</span></div>
+                <div><span class="tv" id="t-rev">0</span><span class="tl">kr intäkt</span></div>
+              </div>
+              <p class="hint">Historikkurvorna finns under Analys-fliken.</p>
+            </section>
+
+            <section>
+              <h2>Efterfrågan</h2>
+              <div class="field">
+                <label>Startbeläggning: <span id="occ-val">40</span>%</label>
+                <input type="range" id="occ" min="0" max="100" step="1" value="40" />
+              </div>
+              <div class="field">
+                <label>Ankomster över dygnet · kl <span id="clock-val">08:00</span> · <span id="curve-val">40</span> bilar/min</label>
+                <canvas id="arr-curve" class="cv-field" style="width:100%;height:76px;display:block;cursor:crosshair;touch-action:none"></canvas>
+                <input type="range" id="clock" min="0" max="23.95" step="0.05" value="8" />
+                <p class="hint">Dra i kurvan för att forma dygnets ankomster. Reglaget flyttar klockan; linjen visar var på dygnet simuleringen är.</p>
+              </div>
+              <div class="field">
+                <label>Veckodag (mån–sön): ×<span id="week-x">1.0</span> idag</label>
+                <canvas id="week-curve" class="cv-field" style="width:100%;height:44px;display:block;cursor:crosshair;touch-action:none"></canvas>
+              </div>
+              <div class="field">
+                <label>Månad (jan–dec): ×<span id="month-x">1.0</span> nu</label>
+                <canvas id="month-curve" class="cv-field" style="width:100%;height:44px;display:block;cursor:crosshair;touch-action:none"></canvas>
               </div>
               <div class="field">
                 <label>Dag i månaden (1–31): ×<span id="dom-x">1.0</span> idag</label>
-                <canvas id="dom-curve" style="width:100%;height:44px;display:block;background:#f6f7fb;border:1px solid #dfe3ea;border-radius:6px;cursor:crosshair;touch-action:none"></canvas>
-                <p class="hint">T.ex. lön den 25:e ×2–3, tomt i plånboken dagarna före. Skala 0–3×.</p>
+                <canvas id="dom-curve" class="cv-field" style="width:100%;height:44px;display:block;cursor:crosshair;touch-action:none"></canvas>
+                <p class="hint">Dra i staplarna: t.ex. måndag ×0.5, fredag ×1.5, december julhandel, lön den 25:e ×2–3. Skala 0–3×.</p>
               </div>
+              <div class="field">
+                <label>Händelser (engångspikar)</label>
+                <div id="ev-list"></div>
+                <div class="row"><button id="ev-add" class="ghost">＋ Händelse</button></div>
+                <p class="hint">T.ex. konsert eller matchdag: datum + tidsfönster + faktor som multipliceras ovanpå kurvorna.</p>
+              </div>
+              <div class="field">
+                <label>Parkeringsavgift: <span id="fee-val">0</span> kr/h</label>
+                <input type="range" id="fee" min="0" max="50" step="1" value="0" />
+                <p class="hint">Avgift dämpar efterfrågan (~halverad vid 25 kr/h) och ger intäkt per betald timme.</p>
+              </div>
+              <div class="field">
+                <label>Andel elbilar bland besökare: <span id="pt-evshare-val">20</span> %</label>
+                <input type="range" id="pt-evshare" min="0" max="60" step="1" value="20" />
+              </div>
+              <div class="field">
+                <label>Laddtid: <span id="pt-charge-val">45</span> min</label>
+                <input type="range" id="pt-charge" min="10" max="240" step="5" value="45" />
+                <p class="hint">Elbilar siktar på en ledig laddplats (annars vanlig plats) och står kvar tills laddningen är klar. Ställ andelen laddplatser per parkeringsyta under Konstruera.</p>
+              </div>
+            </section>
+
+            <section>
+              <h2>Trafik &amp; visning</h2>
               <div class="field">
                 <label>Uppehåll: <span id="dwell-val">20</span> min</label>
                 <input type="range" id="dwell" min="1" max="480" step="1" value="20" />
@@ -319,29 +345,6 @@
               <div class="field">
                 <label>Följeavstånd: <span id="follow-val">1.5</span> s <span class="ai-note">(tresekundersregeln = 3)</span></label>
                 <input type="range" id="follow" min="0" max="3" step="0.1" value="1.5" />
-              </div>
-              <div class="field">
-                <label>Tempo: <span id="tempo-val">20</span>×</label>
-                <input type="range" id="tempo" min="0" max="100" step="1" value="37" />
-                <p class="hint">Logaritmiskt 1×–3600×. Vid max går ett dygn på under en minut och en månad på en kvart–halvtimme (CPU-begränsat).</p>
-              </div>
-              <div class="row">
-                <button id="btn-traffic" class="primary">▶ Starta trafik</button>
-                <button id="btn-treset" class="ghost">Nollställ</button>
-              </div>
-              <p class="hint" id="sim-hint" hidden></p>
-              <div class="field">
-                <label>Historik: <span style="color:#3b5bdb">rullande</span> · <span style="color:#2b8a3e">parkerade</span> · <span style="color:#e03131">kö</span> — <a href="#" id="hv-open">större vy ⤢</a></label>
-                <canvas id="stats-chart" style="width:100%;height:90px;display:block;background:#f6f7fb;border:1px solid #dfe3ea;border-radius:6px"></canvas>
-              </div>
-              <div class="tstats">
-                <div><span class="tv" id="t-circ">0</span><span class="tl">rullande</span></div>
-                <div><span class="tv" id="t-park">0</span><span class="tl">parkerade</span></div>
-                <div><span class="tv" id="t-queue">0</span><span class="tl">i kö</span></div>
-                <div><span class="tv" id="t-search">0 s</span><span class="tl">snitt söktid</span></div>
-                <div><span class="tv" id="t-coll">0</span><span class="tl">krockar</span></div>
-                <div><span class="tv" id="t-away">0</span><span class="tl">avvisade</span></div>
-                <div><span class="tv" id="t-rev">0</span><span class="tl">kr intäkt</span></div>
               </div>
               <p class="hint">Röda stråk = köer/flaskhalsar. IN = infart, UT = utfart. Klicka en bil för att ändra dess förare.</p>
               <label class="check"><input type="checkbox" id="chk-heat" checked /> Visa trafikvärme</label>
@@ -396,6 +399,14 @@
           <!-- ===================== ANALYS ===================== -->
           <div class="tab-page" data-page="analysis" hidden>
             <section>
+              <h2>Historik</h2>
+              <div class="field">
+                <label><span style="color:#3b5bdb">rullande</span> · <span style="color:#2b8a3e">parkerade</span> · <span style="color:#e03131">kö</span> över tid — <a href="#" id="hv-open">större vy ⤢</a></label>
+                <canvas id="stats-chart" class="cv-field" style="width:100%;height:90px;display:block;"></canvas>
+                <p class="hint">Starta trafiken så ritas kurvorna. Öppna större vyn för jämförelse, rapport, heatmap och AI-analys av perioden.</p>
+              </div>
+            </section>
+            <section>
               <h2>Analys &amp; betyg</h2>
               <div class="row">
                 <button id="btn-analyze" class="primary">Analysera layouten</button>
@@ -433,11 +444,11 @@
       </div>
     </div>
 
-    <script src="js/geometry.js?v=112"></script>
-    <script src="js/parking.js?v=112"></script>
-    <script src="js/traffic.js?v=112"></script>
-    <script src="js/render.js?v=112"></script>
-    <script src="js/report.js?v=112"></script>
-    <script src="js/app.js?v=112"></script>
+    <script src="js/geometry.js?v=114"></script>
+    <script src="js/parking.js?v=114"></script>
+    <script src="js/traffic.js?v=114"></script>
+    <script src="js/render.js?v=114"></script>
+    <script src="js/report.js?v=114"></script>
+    <script src="js/app.js?v=114"></script>
   </body>
 </html>

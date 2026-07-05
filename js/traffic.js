@@ -25,31 +25,41 @@
   };
   const g = PS.geom;
 
-  // Assign stall TYPES (hc / ev / staff) from the project's percentages.
+  // Assign stall TYPES (hc / ev / staff) PER PARKING SECTION from each
+  // section's own percentages (section.stallTypes = {hc, ev, staff}).
   // Deterministic from geometry + percentages, so types are never serialized:
-  // handicap closest to the doors, EV chargers clustered just after them,
-  // staff parking farthest away. Re-run after every stall regen / net rebuild.
+  // within a section, handicap closest to the doors, EV chargers just after
+  // them, staff farthest away. Re-run after every stall regen / net rebuild.
   PS.assignStallTypes = function (state, net) {
     const p = state.parking;
     if (!p) return;
-    const cfg = state.stallTypes || {};
-    const stalls = p.stalls, N = stalls.length;
+    const stalls = p.stalls;
     for (const s of stalls) s.type = undefined;
-    const nHC = Math.round(N * (cfg.hc || 0) / 100);
-    const nEV = Math.round(N * (cfg.ev || 0) / 100);
-    const nST = Math.round(N * (cfg.staff || 0) / 100);
-    p._typeCounts = { hc: nHC, ev: nEV, staff: nST };
-    if (!N || (!nHC && !nEV && !nST)) return;
-    // Order by walking distance to the nearest building door (stallAccess.dDoor);
-    // stalls without a door distance keep index order at the end.
-    const dist = stalls.map((s, k) => {
-      const sa = net && net.stallAccess && net.stallAccess[k];
-      return sa && isFinite(sa.dDoor) && sa.dDoor < 9e5 ? sa.dDoor : 1e6 + k;
-    });
-    const idx = stalls.map((_, k) => k).sort((a, b) => dist[a] - dist[b]);
-    for (let i = 0; i < nHC && i < N; i++) stalls[idx[i]].type = "hc";
-    for (let i = nHC; i < nHC + nEV && i < N; i++) stalls[idx[i]].type = "ev";
-    for (let i = 0; i < nST && N - 1 - i >= nHC + nEV; i++) stalls[idx[N - 1 - i]].type = "staff";
+    const totals = { hc: 0, ev: 0, staff: 0 };
+    const secs = state.sections || [];
+    // Group stall indices by their section.
+    const bySec = new Map();
+    for (let k = 0; k < stalls.length; k++) {
+      const si = stalls[k].sec;
+      if (si == null) continue;
+      if (!bySec.has(si)) bySec.set(si, []);
+      bySec.get(si).push(k);
+    }
+    const dDoor = (k) => { const sa = net && net.stallAccess && net.stallAccess[k]; return sa && isFinite(sa.dDoor) && sa.dDoor < 9e5 ? sa.dDoor : 1e6 + k; };
+    for (const [si, idxs] of bySec) {
+      const cfg = (secs[si] && secs[si].stallTypes) || null;
+      if (!cfg) continue;
+      const N = idxs.length;
+      const nHC = Math.round(N * (cfg.hc || 0) / 100);
+      const nEV = Math.round(N * (cfg.ev || 0) / 100);
+      const nST = Math.round(N * (cfg.staff || 0) / 100);
+      if (!nHC && !nEV && !nST) continue;
+      const ordered = idxs.slice().sort((a, b) => dDoor(a) - dDoor(b)); // nearest door first
+      for (let i = 0; i < nHC && i < N; i++) { stalls[ordered[i]].type = "hc"; totals.hc++; }
+      for (let i = nHC; i < nHC + nEV && i < N; i++) { stalls[ordered[i]].type = "ev"; totals.ev++; }
+      for (let i = 0; i < nST && N - 1 - i >= nHC + nEV; i++) { stalls[ordered[N - 1 - i]].type = "staff"; totals.staff++; }
+    }
+    p._typeCounts = totals;
   };
 
   // Vehicle + following constants (metres / seconds).
@@ -2010,6 +2020,7 @@
       sim._periodStart = { d: sim.dateStr, h: sim.hourNow ? sim.hourNow() : 8 };
       if (state.parking) for (const s of state.parking.stalls) s.reserved = false;
       sim.peds = []; sim.conflict.clear(); sim._crashPts = []; sim.entCount = null; sim._gateAcc = null; sim._gateWait = null; sim.visitTotals = {}; sim.reroutes = 0; sim.settles = 0; sim.diverted = 0; sim.revenue = 0; sim._staffToday = 0; sim._staffAcc = 0;
+      sim._runStarted = false; sim._dirtySincePause = false; // a reseed is a fresh run
     };
     // Force a car to stall/crash: it stops and blocks its lane for a while.
     sim.crash = function (car) {

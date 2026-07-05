@@ -194,7 +194,9 @@
   PS.generateManual = function (state) {
     const base = Object.assign({}, PS.defaults, state.params, { noConnectors: true });
     const stalls = [], trees = [], aisleLines = [], aisleGroups = [];
-    for (const sec of state.sections || []) {
+    const secs = state.sections || [];
+    for (let si = 0; si < secs.length; si++) {
+      const sec = secs[si];
       // Polygon section: fill the drawn polygon directly. `sec.rot` rotates the
       // PARKING (rows/aisles) inside the fixed polygon — fill axis-aligned in a
       // frame rotated by -rot about the centroid, then rotate the result back.
@@ -216,7 +218,7 @@
           let inB = false;
           for (const b of state.buildings || []) if (buildingHit(mid[0], mid[1], b, base.buildingClearance)) { inB = true; break; }
           if (inB) continue;
-          stalls.push({ corners: s.corners.map(W), cx: mid[0], cy: mid[1], occupied: false });
+          stalls.push({ corners: s.corners.map(W), cx: mid[0], cy: mid[1], occupied: false, sec: si });
         }
         for (const t of r.trees) { const p = W([t.x, t.y]); trees.push({ x: p[0], y: p[1], r: t.r }); }
         // Drive-aisle ladder → world, then clipped to the polygon + a centre spine.
@@ -248,7 +250,7 @@
         // up to ~4 m into buildings (midpoint-only test, no perimeter drive).
         for (const b of state.buildings || []) if (buildingHit(mid[0], mid[1], b, base.buildingClearance)) { inB = true; break; }
         if (inB) continue;
-        stalls.push({ corners: s.corners.map(tf), cx: mid[0], cy: mid[1], occupied: false });
+        stalls.push({ corners: s.corners.map(tf), cx: mid[0], cy: mid[1], occupied: false, sec: si });
       }
       for (const t of r.trees) { const p = tf([t.x, t.y]); trees.push({ x: p[0], y: p[1], r: t.r }); }
       // Transform the section's drive-aisle ladder (rungs + rails) into world.

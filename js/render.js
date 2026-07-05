@@ -24,6 +24,11 @@
     label: "#3a3a3a",
     dim: "#7a7f8a",
   };
+  // Only the "paper" backdrop + neighbourhood context changes for dark mode;
+  // asphalt / stalls / cars read fine on either. Swap the relevant keys.
+  const LIGHT_BG = { paper: "#e9e6df", neighbour: "#dbd6cc", neighbourEdge: "#cdc7bb", street: "#f5f3ef", streetEdge: "#d8d3c8", streetDash: "#c9c3b6", asphalt: "#949aa6", asphaltEdge: "#5f6470", label: "#3a3a3a", dim: "#7a7f8a" };
+  const DARK_BG = { paper: "#15171c", neighbour: "#20242b", neighbourEdge: "#2a2f38", street: "#22262e", streetEdge: "#31363f", streetDash: "#3b414b", asphalt: "#3d434e", asphaltEdge: "#20242b", label: "#c3c8d0", dim: "#8b909c" };
+  PS.setCanvasTheme = function (dark) { Object.assign(COLORS, dark ? DARK_BG : LIGHT_BG); };
   const BUILDING_FILLS = ["#8ec89a", "#e3d98f", "#c9a9d6", "#9dc0e0", "#e0b48f"];
   const CAR_COLORS = [
     "#3f6fb5", "#5b8dd6", "#c9ced6", "#e8e9ec", "#8a94a6",
@@ -679,10 +684,10 @@
       ctx.save();
       ctx.textAlign = "center"; ctx.textBaseline = "middle";
       ctx.font = "600 17px system-ui, sans-serif";
-      ctx.fillStyle = "rgba(15,17,22,0.45)";
+      ctx.fillStyle = COLORS.label;
       ctx.fillText("Börja här: 1. Rita en Sektion (parkering)   2. Rita en Väg   3. Lägg till Infart och Utfart", W / 2, H / 2 - 14);
       ctx.font = "400 14px system-ui, sans-serif";
-      ctx.fillStyle = "rgba(15,17,22,0.35)";
+      ctx.fillStyle = COLORS.dim;
       ctx.fillText("Verktygen finns under Konstruera till höger — eller byt till Karta och traca en riktig plats.", W / 2, H / 2 + 14);
       ctx.restore();
     }

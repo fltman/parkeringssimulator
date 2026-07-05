@@ -91,7 +91,10 @@ html, body {
 }
 #map-search input:focus { outline: none; border-color: var(--accent); }
 #map-search input.notfound { border-color: #e03131; }
-#canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; display: block; cursor: grab; }
+/* user-select/user-drag OFF: in map mode the canvas is transparent, and
+   -webkit-user-drag:auto let Chrome start a native image-drag of it (a globe
+   ghost that hijacked the mouse so objects/vertices couldn't be dragged). */
+#canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; display: block; cursor: grab; user-select: none; -webkit-user-select: none; -webkit-user-drag: none; }
 #canvas.dragging { cursor: grabbing; }
 #canvas.editing { cursor: crosshair; }
 

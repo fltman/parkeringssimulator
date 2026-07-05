@@ -642,6 +642,12 @@
     pickMenuEl = menu;
     setTimeout(() => { window.addEventListener("mousedown", pickMenuOutside, true); window.addEventListener("keydown", pickMenuKey, true); }, 0);
   }
+  // Kill any native drag that could start on the canvas — in map mode the
+  // transparent canvas would otherwise get picked up as a draggable image
+  // (the "flying globe" ghost) and steal the mousemove stream mid-drag.
+  // dragstart+preventDefault cancels it without the focus/blur side effects a
+  // mousedown preventDefault would bring.
+  canvas.addEventListener("dragstart", (e) => e.preventDefault());
   canvas.addEventListener("mousedown", (e) => {
     const w = mouseWorld(e);
     const scr = mouseScreen(e);
